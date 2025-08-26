@@ -1,0 +1,56 @@
+# Build results
+bin/
+obj/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.cache
+*.runtimeconfig.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*~
+
+# Logs
+*.log
+logs/
+
+# Output directories
+Output/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# NuGet
+packages/
+*.nupkg
+
+# Test results
+TestResults/
+
+# Coverage reports
+coverage/
+*.coverage
+*.coveragexml
+
+# Resharper
+_ReSharper*/
+*.DotSettings.user
+
+# JetBrains
+.idea/
+
+# Local development database files
+*.fdb
+*.gdb

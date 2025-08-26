@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "DatabaseMigrationTool": {
+      "commandName": "Project",
+      "commandLineArgs": "",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      },
+      "nativeDebugging": false,
+      "remoteDebugEnabled": false
+    }
+  }
+}

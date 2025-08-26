@@ -1,0 +1,106 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <UseAppHost>true</UseAppHost>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <PlatformTarget>x86</PlatformTarget>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>portable</DebugType>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommandLineParser" Version="2.9.1" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0" />
+    <PackageReference Include="MySqlConnector" Version="2.3.5" />
+    <PackageReference Include="Npgsql" Version="8.0.3" />
+    <PackageReference Include="Dapper" Version="2.1.28" />
+    <PackageReference Include="MessagePack" Version="2.5.187" />
+    <PackageReference Include="SharpCompress" Version="0.36.0" />
+    <PackageReference Include="System.Data.Common" Version="4.3.0" />
+    <!-- Firebird database provider dependency -->
+    <PackageReference Include="FirebirdSql.Data.FirebirdClient" Version="10.3.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Include essential Firebird embedded client files -->
+    <Content Include="firebird\fbembed.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>fbembed.dll</Link>
+    </Content>
+    <Content Include="firebird\fbclient.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>fbclient.dll</Link>
+    </Content>
+    <Content Include="firebird\fbintl.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>fbintl.dll</Link>
+    </Content>
+    <Content Include="firebird\ib_util.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\ib_util.dll</Link>
+    </Content>
+    <!-- Unicode/internationalization support - copy to both root and firebird subdirectory -->
+    <Content Include="firebird\icudt30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>icudt30.dll</Link>
+    </Content>
+    <Content Include="firebird\icuin30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>icuin30.dll</Link>
+    </Content>
+    <Content Include="firebird\icuuc30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>icuuc30.dll</Link>
+    </Content>
+    <!-- Keep copies in firebird subdirectory for configuration files -->
+    <Content Include="firebird\icudt30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\icudt30_sub.dll</Link>
+    </Content>
+    <Content Include="firebird\icuin30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\icuin30_sub.dll</Link>
+    </Content>
+    <Content Include="firebird\icuuc30.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\icuuc30_sub.dll</Link>
+    </Content>
+    <!-- Microsoft Visual C++ 2005 runtime libraries -->
+    <Content Include="firebird\msvcp80.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>msvcp80.dll</Link>
+    </Content>
+    <Content Include="firebird\msvcr80.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>msvcr80.dll</Link>
+    </Content>
+    <!-- Configuration files -->
+    <Content Include="firebird\firebird.conf">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\firebird.conf</Link>
+    </Content>
+    <Content Include="firebird\fbintl.conf">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\fbintl.conf</Link>
+    </Content>
+    <Content Include="firebird\firebird.msg">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>firebird\firebird.msg</Link>
+    </Content>
+  </ItemGroup>
+
+</Project>
