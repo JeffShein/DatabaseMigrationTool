@@ -275,6 +275,31 @@ The `ConnectionStringControl` in the Controls folder provides a unified interfac
    - SSL connection is enabled by default
    - All fields are editable by default
 
+### Table Selection Interface
+
+The application includes a comprehensive table selection system for all operations:
+
+1. **Table Browser Window** (`TableSelectionWindow`):
+   - Connects to the configured database and loads all available tables
+   - Provides search/filter functionality to quickly find specific tables
+   - Shows table names with schema prefixes when applicable
+   - Supports multi-selection with checkboxes and Select All/None buttons
+   - Displays selection count and status information
+   - Remembers previously selected tables when reopened
+
+2. **Table Field Enhancements**:
+   - **Browse Button**: Opens the table selection window for easy table picking
+   - **Clear Button (✖)**: Quickly clears the table list
+   - **Bidirectional Sync**: Existing table selections are pre-checked in the browser
+   - **Comma-Separated Output**: Selected tables populate as comma-separated list
+
+3. **Intelligent Caching System**:
+   - **Performance Optimization**: Table lists are cached to avoid repeated database queries
+   - **Smart Invalidation**: Cache automatically refreshes when provider or connection changes
+   - **Per-Tab Caching**: Each tab (Export, Import, Schema) maintains independent cache
+   - **Instant Loading**: Subsequent table browsing operations load instantly from cache
+   - **Visual Feedback**: Status indicates whether data is from cache or fresh database query
+
 ### Schema View Window
 
 The Schema View functionality provides comprehensive database schema analysis:
@@ -291,8 +316,15 @@ The Schema View functionality provides comprehensive database schema analysis:
 
 Firebird requires specific DLL files to be deployed with the application:
 - `fbembed.dll`, `fbclient.dll`, `fbintl.dll` (Firebird libraries)
+- `icudt30.dll`, `icuin30.dll`, `icuuc30.dll` (Unicode/internationalization support)
 - `msvcp80.dll`, `msvcr80.dll` (Visual C++ runtime)
-- All DLLs must be in the application root directory, not subdirectories
+- Configuration files: `firebird.conf`, `fbintl.conf`, `firebird.msg`
+
+**Deployment Structure**:
+- All DLL files are copied to the application root directory for runtime access
+- Configuration files are maintained in the `firebird\` subdirectory
+- The project uses an MSBuild target to automatically copy DLLs from `firebird\` source folder to root output
+- Single source location in `firebird\` directory prevents file duplication in project
 
 ### Connection String Compatibility
 
@@ -324,3 +356,26 @@ The application ensures that the selected provider in the UI matches the provide
 4. **Username/Password fields not properly disabled**:
    - Verify that Windows Authentication is properly initialized as default
    - Check that event handlers for authentication type changes are properly wired
+
+5. **Table selection performance**:
+   - Table lists are cached automatically per connection
+   - Cache invalidates when provider or connection string changes
+   - Use "Browse..." buttons for efficient table selection instead of manual typing
+
+## Recent Enhancements
+
+### User Interface Improvements
+- **Table Selection System**: Added comprehensive table browsing with search, multi-select, and caching
+- **Connection Defaults**: Improved initialization of default values for all database providers  
+- **Authentication Handling**: Fixed SQL Server Windows Authentication defaults and field states
+- **Project Structure**: Cleaned up Firebird DLL deployment to use single source location
+
+### Performance Optimizations
+- **Intelligent Caching**: Table lists are cached per connection to avoid repeated database queries
+- **Smart Cache Invalidation**: Cache automatically refreshes only when connection details change
+- **Instant Table Loading**: Subsequent table browsing operations load instantly from cache
+
+### Developer Experience
+- **Cleaner Project File**: Simplified Firebird component deployment using MSBuild targets
+- **Better Documentation**: Enhanced CLAUDE.md with comprehensive UI behavior documentation
+- **Consistent Patterns**: Standardized connection handling across all database providers
