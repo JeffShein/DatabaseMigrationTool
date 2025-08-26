@@ -69,8 +69,19 @@
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Tables:" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="ExportTablesTextBox" Margin="5"
-                                         ToolTip="Comma-separated list of tables. Leave blank to export all tables."/>
+                                <Grid Grid.Row="0" Grid.Column="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" x:Name="ExportTablesTextBox" Margin="5"
+                                             ToolTip="Comma-separated list of tables. Leave blank to export all tables."/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="2,5,2,5" Padding="8,2" 
+                                            Click="BrowseExportTables_Click" ToolTip="Browse available tables"/>
+                                    <Button Grid.Column="2" Content="✖" Margin="2,5,5,5" Padding="8,2" 
+                                            Click="ClearExportTables_Click" ToolTip="Clear table list"/>
+                                </Grid>
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Table Criteria:" VerticalAlignment="Center"/>
                                 <Grid Grid.Row="1" Grid.Column="1">
@@ -159,8 +170,19 @@
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Tables:" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3" x:Name="ImportTablesTextBox" Margin="5"
-                                         ToolTip="Comma-separated list of tables. Leave blank to import all tables."/>
+                                <Grid Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" x:Name="ImportTablesTextBox" Margin="5"
+                                             ToolTip="Comma-separated list of tables. Leave blank to import all tables."/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="2,5,2,5" Padding="8,2" 
+                                            Click="BrowseImportTables_Click" ToolTip="Browse available tables"/>
+                                    <Button Grid.Column="2" Content="✖" Margin="2,5,5,5" Padding="8,2" 
+                                            Click="ClearImportTables_Click" ToolTip="Clear table list"/>
+                                </Grid>
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Batch Size:" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="ImportBatchSizeTextBox" Margin="5" Text="100000"/>
@@ -234,8 +256,19 @@
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Tables:" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="SchemaTablesTextBox" Margin="5"
-                                         ToolTip="Comma-separated list of tables. Leave blank to view all tables."/>
+                                <Grid Grid.Row="0" Grid.Column="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" x:Name="SchemaTablesTextBox" Margin="5"
+                                             ToolTip="Comma-separated list of tables. Leave blank to view all tables."/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="2,5,2,5" Padding="8,2" 
+                                            Click="BrowseSchemaTables_Click" ToolTip="Browse available tables"/>
+                                    <Button Grid.Column="2" Content="✖" Margin="2,5,5,5" Padding="8,2" 
+                                            Click="ClearSchemaTables_Click" ToolTip="Clear table list"/>
+                                </Grid>
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Detailed View:" VerticalAlignment="Center"/>
                                 <CheckBox Grid.Row="1" Grid.Column="1" x:Name="SchemaVerboseCheckBox" Margin="10" 

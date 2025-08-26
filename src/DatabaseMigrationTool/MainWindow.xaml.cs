@@ -12,11 +12,16 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls;
+using System.Globalization;
 
 namespace DatabaseMigrationTool
 {
     public partial class MainWindow : Window
     {
+        // Table cache to avoid repeated database calls
+        private readonly Dictionary<string, List<TableSchema>> _tableCache = new Dictionary<string, List<TableSchema>>();
+        private readonly Dictionary<string, string> _lastConnectionInfo = new Dictionary<string, string>();
+
         private string ExportConnectionString => GetExportConnectionString();
 
         private string ImportConnectionString => GetImportConnectionString();
@@ -33,6 +38,24 @@ namespace DatabaseMigrationTool
             
             // Initialize provider ComboBoxes
             var providers = DatabaseProviderFactory.GetSupportedProviders();
+            
+            // Set up cache invalidation when connection settings change
+            SetupCacheInvalidation();
+        }
+
+        private void SetupCacheInvalidation()
+        {
+            // We'll check for changes when browsing tables instead of real-time monitoring
+            // This is simpler and more reliable than trying to monitor all connection changes
+        }
+
+        private void InvalidateTableCache(string tabName)
+        {
+            if (_tableCache.ContainsKey(tabName))
+            {
+                _tableCache.Remove(tabName);
+                _lastConnectionInfo.Remove(tabName);
+            }
         }
 
         private void BrowseExportOutputDirectory(object sender, RoutedEventArgs e)
@@ -637,5 +660,110 @@ namespace DatabaseMigrationTool
                 default: return "SqlServer";
             }
         }
+
+        #region Table Selection Event Handlers
+
+        private async void BrowseExportTables_Click(object sender, RoutedEventArgs e)
+        {
+            await BrowseTables(ExportConnectionControl, ExportTablesTextBox, "export");
+        }
+
+        private void ClearExportTables_Click(object sender, RoutedEventArgs e)
+        {
+            ExportTablesTextBox.Text = string.Empty;
+        }
+
+        private async void BrowseImportTables_Click(object sender, RoutedEventArgs e)
+        {
+            await BrowseTables(ImportConnectionControl, ImportTablesTextBox, "import");
+        }
+
+        private void ClearImportTables_Click(object sender, RoutedEventArgs e)
+        {
+            ImportTablesTextBox.Text = string.Empty;
+        }
+
+        private async void BrowseSchemaTables_Click(object sender, RoutedEventArgs e)
+        {
+            await BrowseTables(SchemaConnectionControl, SchemaTablesTextBox, "schema");
+        }
+
+        private void ClearSchemaTables_Click(object sender, RoutedEventArgs e)
+        {
+            SchemaTablesTextBox.Text = string.Empty;
+        }
+
+        private async Task BrowseTables(Controls.ConnectionStringControl connectionControl, TextBox tablesTextBox, string operation)
+        {
+            try
+            {
+                // Get connection string and provider
+                string connectionString = connectionControl?.ConnectionString ?? string.Empty;
+                int providerIndex = connectionControl?.ProviderIndex ?? 0;
+
+                // Validate connection information
+                if (string.IsNullOrWhiteSpace(connectionString))
+                {
+                    MessageBox.Show("Please configure the database connection first.", "Connection Required", 
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // Get provider
+                string providerName = GetSelectedProviderName(providerIndex);
+                var provider = DatabaseProviderFactory.Create(providerName);
+
+                // Create cache key based on connection details
+                string cacheKey = $"{providerName}|{connectionString}";
+                string tabName = CultureInfo.CurrentCulture.TextInfo.ToTitleCase(operation);
+
+                // Check if we need to refresh the cache
+                List<TableSchema>? cachedTables = null;
+                bool useCache = _lastConnectionInfo.ContainsKey(tabName) && 
+                               _lastConnectionInfo[tabName] == cacheKey &&
+                               _tableCache.ContainsKey(tabName);
+
+                if (useCache)
+                {
+                    cachedTables = _tableCache[tabName];
+                }
+
+                // Parse existing selected tables
+                List<string>? preselectedTables = null;
+                if (!string.IsNullOrWhiteSpace(tablesTextBox.Text))
+                {
+                    preselectedTables = tablesTextBox.Text
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .ToList();
+                }
+
+                // Show table selection window
+                var tableSelectionWindow = new TableSelectionWindow(provider, connectionString, preselectedTables, cachedTables)
+                {
+                    Owner = this,
+                    Title = $"Select Tables for {tabName}"
+                };
+
+                if (tableSelectionWindow.ShowDialog() == true)
+                {
+                    // Update the text box with selected tables
+                    tablesTextBox.Text = string.Join(", ", tableSelectionWindow.SelectedTableNames);
+                    
+                    // Cache the loaded tables for future use
+                    if (tableSelectionWindow.LoadedTables != null)
+                    {
+                        _tableCache[tabName] = tableSelectionWindow.LoadedTables;
+                        _lastConnectionInfo[tabName] = cacheKey;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error browsing tables: {ex.Message}", "Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        #endregion
     }
 }
