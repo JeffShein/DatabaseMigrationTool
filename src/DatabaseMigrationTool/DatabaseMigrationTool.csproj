@@ -36,71 +36,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Include essential Firebird embedded client files -->
-    <Content Include="firebird\fbembed.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>fbembed.dll</Link>
-    </Content>
-    <Content Include="firebird\fbclient.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>fbclient.dll</Link>
-    </Content>
-    <Content Include="firebird\fbintl.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>fbintl.dll</Link>
-    </Content>
-    <Content Include="firebird\ib_util.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\ib_util.dll</Link>
-    </Content>
-    <!-- Unicode/internationalization support - copy to both root and firebird subdirectory -->
-    <Content Include="firebird\icudt30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>icudt30.dll</Link>
-    </Content>
-    <Content Include="firebird\icuin30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>icuin30.dll</Link>
-    </Content>
-    <Content Include="firebird\icuuc30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>icuuc30.dll</Link>
-    </Content>
-    <!-- Keep copies in firebird subdirectory for configuration files -->
-    <Content Include="firebird\icudt30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\icudt30_sub.dll</Link>
-    </Content>
-    <Content Include="firebird\icuin30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\icuin30_sub.dll</Link>
-    </Content>
-    <Content Include="firebird\icuuc30.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\icuuc30_sub.dll</Link>
-    </Content>
-    <!-- Microsoft Visual C++ 2005 runtime libraries -->
-    <Content Include="firebird\msvcp80.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>msvcp80.dll</Link>
-    </Content>
-    <Content Include="firebird\msvcr80.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>msvcr80.dll</Link>
-    </Content>
-    <!-- Configuration files -->
-    <Content Include="firebird\firebird.conf">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\firebird.conf</Link>
-    </Content>
-    <Content Include="firebird\fbintl.conf">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\fbintl.conf</Link>
-    </Content>
-    <Content Include="firebird\firebird.msg">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-      <Link>firebird\firebird.msg</Link>
-    </Content>
+    <!-- Include firebird directory as content, keeping folder structure -->
+    <Content Include="firebird\**" CopyToOutputDirectory="Always" />
   </ItemGroup>
+
+  <!-- MSBuild target to copy Firebird DLLs to root directory after build -->
+  <Target Name="CopyFirebirdDllsToRoot" AfterTargets="Build">
+    <ItemGroup>
+      <FirebirdDlls Include="$(OutputPath)firebird\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FirebirdDlls)" DestinationFolder="$(OutputPath)" />
+  </Target>
 
 </Project>
