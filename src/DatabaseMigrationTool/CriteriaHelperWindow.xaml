@@ -17,11 +17,14 @@
         <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,10">
             <Run Text="Create WHERE criteria for your selected tables. "/>
             <Run FontWeight="Bold" Text="Note: "/>
-            <Run Text="Do not include the 'WHERE' keyword - it will be added automatically. Use the table's column names and appropriate SQL syntax for your database provider. "/>
+            <Run Text="Do not include the 'WHERE' keyword - it will be added automatically. "/>
             <LineBreak/>
-            <Run FontWeight="Bold" Text="Date Format: "/>
-            <Run Text="Use 'YYYY-MM-DD' format (e.g., '2025-04-01') for dates. "/>
-            <Run FontWeight="Bold" Foreground="Red" Text="Red borders indicate validation errors - hover for details."/>
+            <Run FontWeight="Bold" Text="Smart Features: "/>
+            <Run Text="• Type 2+ letters for column suggestions • Click 📅 for date picker • Examples adapt to column types"/>
+            <LineBreak/>
+            <Run FontWeight="Bold" Text="Validation: "/>
+            <Run Text="Real-time validation checks column names, data types, and SQL syntax. "/>
+            <Run FontWeight="Bold" Foreground="Red" Text="Red borders show errors - hover for details."/>
         </TextBlock>
         
         <!-- Table criteria editor -->

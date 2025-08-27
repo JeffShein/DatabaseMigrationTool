@@ -11,6 +11,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -20,8 +21,26 @@
             <TextBlock Text="Database Migration Tool" FontSize="22" FontWeight="SemiBold" Foreground="White" />
         </Border>
 
+        <!-- Global Profile Indicator -->
+        <Border Grid.Row="1" Background="#F0F8FF" BorderBrush="#D0E7FF" BorderThickness="0,0,0,1" Padding="10,5"
+               x:Name="GlobalProfileIndicator" Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <TextBlock Grid.Column="0" Text="🌐 Active Profile:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock Grid.Column="1" x:Name="ActiveProfileText" VerticalAlignment="Center" FontWeight="Bold" Foreground="#0078D7"/>
+                <Button Grid.Column="2" Content="✖ Clear" Padding="8,2" Click="ClearGlobalProfile_Click" 
+                       Background="Transparent" BorderBrush="#D0E7FF" BorderThickness="1" 
+                       ToolTip="Clear active profile from all tabs"/>
+            </Grid>
+        </Border>
+
         <!-- Main content -->
-        <TabControl Grid.Row="1" Margin="10">
+        <TabControl Grid.Row="2" Margin="10">
             <TabItem Header="Export">
                 <ScrollViewer>
                     <StackPanel Margin="10">
@@ -305,7 +324,7 @@
         </TabControl>
         
         <!-- Status bar -->
-        <StatusBar Grid.Row="2">
+        <StatusBar Grid.Row="3">
             <StatusBarItem>
                 <TextBlock x:Name="StatusTextBlock" Text="Ready"/>
             </StatusBarItem>

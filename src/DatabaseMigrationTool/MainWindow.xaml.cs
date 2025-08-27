@@ -23,6 +23,10 @@ namespace DatabaseMigrationTool
         // Table cache to avoid repeated database calls
         private readonly Dictionary<string, List<TableSchema>> _tableCache = new Dictionary<string, List<TableSchema>>();
         private readonly Dictionary<string, string> _lastConnectionInfo = new Dictionary<string, string>();
+        
+        // Shared profile management
+        private readonly ConnectionProfileManager _sharedProfileManager;
+        private ConnectionProfile? _currentSharedProfile;
 
         private string ExportConnectionString => GetExportConnectionString();
 
@@ -38,11 +42,17 @@ namespace DatabaseMigrationTool
         {
             InitializeComponent();
             
+            // Initialize shared profile manager
+            _sharedProfileManager = new ConnectionProfileManager();
+            
             // Initialize provider ComboBoxes
             var providers = DatabaseProviderFactory.GetSupportedProviders();
             
             // Set up cache invalidation when connection settings change
             SetupCacheInvalidation();
+            
+            // Set up shared profile system
+            SetupSharedProfileSystem();
         }
 
         private void SetupCacheInvalidation()
@@ -909,6 +919,88 @@ namespace DatabaseMigrationTool
                 MessageBox.Show($"Error browsing tables: {ex.Message}", "Error", 
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        #endregion
+
+        #region Shared Profile System
+
+        private void SetupSharedProfileSystem()
+        {
+            // Configure all connection controls to use the shared profile manager
+            Loaded += (s, e) =>
+            {
+                if (ExportConnectionControl != null)
+                    ConfigureConnectionControlForSharedProfiles(ExportConnectionControl, "Export");
+                if (ImportConnectionControl != null)
+                    ConfigureConnectionControlForSharedProfiles(ImportConnectionControl, "Import");
+                if (SchemaConnectionControl != null)
+                    ConfigureConnectionControlForSharedProfiles(SchemaConnectionControl, "Schema");
+            };
+        }
+
+        private void ConfigureConnectionControlForSharedProfiles(ConnectionStringControl control, string tabName)
+        {
+            // Replace the control's profile manager with the shared one
+            control.SetSharedProfileManager(_sharedProfileManager, OnSharedProfileChanged);
+        }
+
+        private void OnSharedProfileChanged(ConnectionProfile? profile, string initiatingTab)
+        {
+            _currentSharedProfile = profile;
+            
+            if (profile == null) 
+            {
+                // Hide global profile indicator
+                if (GlobalProfileIndicator != null)
+                    GlobalProfileIndicator.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            // Apply the selected profile to all other connection controls
+            if (ExportConnectionControl != null && initiatingTab != "Export")
+                ExportConnectionControl.LoadSharedProfile(profile);
+            if (ImportConnectionControl != null && initiatingTab != "Import")
+                ImportConnectionControl.LoadSharedProfile(profile);
+            if (SchemaConnectionControl != null && initiatingTab != "Schema")
+                SchemaConnectionControl.LoadSharedProfile(profile);
+
+            // Show global profile indicator
+            if (GlobalProfileIndicator != null && ActiveProfileText != null)
+            {
+                GlobalProfileIndicator.Visibility = Visibility.Visible;
+                ActiveProfileText.Text = $"{profile.Name} ({profile.Provider} - {profile.Server})";
+            }
+
+            // Invalidate table cache since connection changed
+            _tableCache.Clear();
+            _lastConnectionInfo.Clear();
+            
+            // Update status
+            StatusTextBlock.Text = $"Profile '{profile.Name}' loaded across all tabs";
+        }
+        
+        private void ClearGlobalProfile_Click(object sender, RoutedEventArgs e)
+        {
+            // Clear the active profile from all connection controls
+            _currentSharedProfile = null;
+            
+            if (ExportConnectionControl != null)
+                ExportConnectionControl.ClearProfile();
+            if (ImportConnectionControl != null)
+                ImportConnectionControl.ClearProfile();
+            if (SchemaConnectionControl != null)
+                SchemaConnectionControl.ClearProfile();
+            
+            // Hide global profile indicator
+            if (GlobalProfileIndicator != null)
+                GlobalProfileIndicator.Visibility = Visibility.Collapsed;
+            
+            // Clear table cache
+            _tableCache.Clear();
+            _lastConnectionInfo.Clear();
+            
+            StatusTextBlock.Text = "Profile cleared from all tabs";
         }
 
         #endregion

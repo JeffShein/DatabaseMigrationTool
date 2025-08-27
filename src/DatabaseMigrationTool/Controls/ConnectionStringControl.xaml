@@ -10,10 +10,41 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Connection type selection -->
+        <!-- Connection Profiles -->
         <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <TextBlock Grid.Column="0" Text="Profile:" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <ComboBox Grid.Column="1" x:Name="ProfileComboBox" Margin="0,5" 
+                     SelectionChanged="ProfileComboBox_SelectionChanged"
+                     ToolTip="Select a saved connection profile">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Name}" FontWeight="Bold" Margin="0,0,5,0"/>
+                            <TextBlock Text="{Binding Provider}" Foreground="Gray" Margin="0,0,5,0"/>
+                            <TextBlock Text="-" Foreground="Gray" Margin="0,0,5,0"/>
+                            <TextBlock Text="{Binding Server}" Foreground="Gray"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="2" Content="💾" Margin="5,5,2,5" Padding="8,2" Click="SaveProfile_Click"
+                   ToolTip="Save current connection as profile" FontSize="14"/>
+            <Button Grid.Column="3" Content="📋" Margin="2,5,0,5" Padding="8,2" Click="ManageProfiles_Click"
+                   ToolTip="Manage connection profiles" FontSize="14"/>
+        </Grid>
+
+        <!-- Connection type selection -->
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -32,7 +63,7 @@
         </Grid>
 
         <!-- Connection details card -->
-        <Border Grid.Row="1" Background="White" BorderBrush="#DDDDDD" BorderThickness="1" Margin="0,5,0,0" Padding="10">
+        <Border Grid.Row="2" Background="White" BorderBrush="#DDDDDD" BorderThickness="1" Margin="0,5,0,0" Padding="10">
             <Grid>
                 <Grid x:Name="SqlServerPanel">
                     <Grid.ColumnDefinitions>

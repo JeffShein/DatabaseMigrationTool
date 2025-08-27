@@ -1,6 +1,9 @@
 using DatabaseMigrationTool.Helpers;
+using DatabaseMigrationTool.Models;
+using DatabaseMigrationTool.Services;
 using Microsoft.Win32;
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -8,6 +11,15 @@ namespace DatabaseMigrationTool.Controls
 {
     public partial class ConnectionStringControl : UserControl
     {
+        #region Fields
+
+        private ConnectionProfileManager _profileManager;
+        private bool _isLoadingProfile = false;
+        private Action<ConnectionProfile?, string>? _sharedProfileChangedCallback;
+        private string _tabIdentifier = "";
+
+        #endregion
+
         #region Dependency Properties
 
         public static readonly DependencyProperty ConnectionStringProperty =
@@ -226,10 +238,12 @@ namespace DatabaseMigrationTool.Controls
         public ConnectionStringControl()
         {
             InitializeComponent();
+            _profileManager = new ConnectionProfileManager();
             
             // Need to use the Loaded event to ensure UI elements are initialized
             Loaded += (s, e) => 
             {
+                LoadProfiles();
                 UpdatePanelVisibility();
                 UpdateOptionAvailability();
                 
@@ -773,6 +787,328 @@ namespace DatabaseMigrationTool.Controls
                 }
             }
         }
+
+        #region Profile Management
+
+        private void LoadProfiles()
+        {
+            if (ProfileComboBox == null) return;
+            
+            try
+            {
+                ProfileComboBox.ItemsSource = null;
+                var profiles = _profileManager.GetProfiles().OrderBy(p => p.Name).ToList();
+                profiles.Insert(0, new ConnectionProfile { Name = "(Select a profile...)" });
+                ProfileComboBox.ItemsSource = profiles;
+                ProfileComboBox.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to load profiles: {ex.Message}");
+            }
+        }
+        
+        private void ProfileComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isLoadingProfile || ProfileComboBox.SelectedItem is not ConnectionProfile profile || 
+                string.IsNullOrEmpty(profile.Provider))
+                return;
+                
+            _isLoadingProfile = true;
+            try
+            {
+                LoadProfileIntoFields(profile);
+                _profileManager.UpdateLastUsed(profile.Name);
+                
+                // Notify shared profile system about the change
+                NotifySharedProfileChanged(profile);
+            }
+            finally
+            {
+                _isLoadingProfile = false;
+            }
+        }
+        
+        private void SaveProfile_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var currentProfile = GetCurrentProfileFromFields();
+                if (string.IsNullOrEmpty(currentProfile.Provider))
+                {
+                    MessageBox.Show("Please configure a connection before saving a profile.", 
+                        "No Connection", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+                
+                var saveWindow = new SaveProfileWindow(currentProfile)
+                {
+                    Owner = Window.GetWindow(this)
+                };
+                
+                if (saveWindow.ShowDialog() == true && saveWindow.Profile != null)
+                {
+                    _profileManager.SaveProfile(saveWindow.Profile);
+                    LoadProfiles();
+                    
+                    // Select the newly saved profile
+                    var profiles = ProfileComboBox.ItemsSource as System.Collections.Generic.List<ConnectionProfile>;
+                    var savedProfile = profiles?.FirstOrDefault(p => p.Name == saveWindow.Profile.Name);
+                    if (savedProfile != null)
+                    {
+                        ProfileComboBox.SelectedItem = savedProfile;
+                    }
+                    
+                    MessageBox.Show($"Profile '{saveWindow.Profile.Name}' saved successfully!",
+                        "Profile Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to save profile: {ex.Message}", 
+                    "Save Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        
+        private void ManageProfiles_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var manageWindow = new ManageProfilesWindow(_profileManager)
+                {
+                    Owner = Window.GetWindow(this)
+                };
+                
+                if (manageWindow.ShowDialog() == true && manageWindow.SelectedProfile != null)
+                {
+                    LoadProfiles();
+                    
+                    // Select the chosen profile
+                    var profiles = ProfileComboBox.ItemsSource as System.Collections.Generic.List<ConnectionProfile>;
+                    var selectedProfile = profiles?.FirstOrDefault(p => p.Name == manageWindow.SelectedProfile.Name);
+                    if (selectedProfile != null)
+                    {
+                        ProfileComboBox.SelectedItem = selectedProfile;
+                    }
+                }
+                else
+                {
+                    // Just refresh the list in case profiles were modified
+                    LoadProfiles();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to open profile manager: {ex.Message}", 
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        
+        private ConnectionProfile GetCurrentProfileFromFields()
+        {
+            var profile = new ConnectionProfile();
+            
+            // Get provider
+            var providerNames = new[] { "SqlServer", "MySQL", "PostgreSQL", "Firebird" };
+            profile.Provider = ProviderIndex < providerNames.Length ? providerNames[ProviderIndex] : "SqlServer";
+            
+            switch (ProviderIndex)
+            {
+                case 0: // SQL Server
+                    profile.Server = SqlServerServer ?? "";
+                    profile.Database = SqlServerDatabase ?? "";
+                    profile.Username = SqlServerUsername ?? "";
+                    profile.Password = _sqlServerPassword ?? "";
+                    profile.UseWindowsAuth = SqlServerWindowsAuthRadioButton?.IsChecked == true;
+                    profile.TrustServerCertificate = SqlServerTrustCertCheckBox?.IsChecked == true;
+                    break;
+                    
+                case 1: // MySQL
+                    profile.Server = MySqlServer ?? "";
+                    profile.Database = MySqlDatabase ?? "";
+                    profile.Username = MySqlUsername ?? "";
+                    profile.Password = _mySqlPassword ?? "";
+                    profile.Port = int.TryParse(MySqlPort, out int mysqlPort) ? mysqlPort : 3306;
+                    profile.UseSsl = MySqlSslCheckBox?.IsChecked == true;
+                    break;
+                    
+                case 2: // PostgreSQL
+                    profile.Server = PostgreSqlHost ?? "";
+                    profile.Database = PostgreSqlDatabase ?? "";
+                    profile.Username = PostgreSqlUsername ?? "";
+                    profile.Password = _postgreSqlPassword ?? "";
+                    profile.Port = int.TryParse(PostgreSqlPort, out int pgPort) ? pgPort : 5432;
+                    profile.UseSsl = PostgreSqlSslCheckBox?.IsChecked == true;
+                    break;
+                    
+                case 3: // Firebird
+                    profile.Server = "localhost";
+                    profile.DatabasePath = FirebirdDatabaseFile ?? "";
+                    profile.Username = FirebirdUsername ?? "";
+                    profile.Password = _firebirdPassword ?? "";
+                    profile.ReadOnlyConnection = FirebirdReadOnlyCheckBox?.IsChecked == true;
+                    profile.FirebirdVersion = FirebirdFormatComboBox?.SelectedIndex == 0 ? "3.0" : "2.5";
+                    break;
+            }
+            
+            return profile;
+        }
+        
+        private void LoadProfileIntoFields(ConnectionProfile profile)
+        {
+            // Set provider first
+            var providerNames = new[] { "SqlServer", "MySQL", "PostgreSQL", "Firebird" };
+            var providerIndex = Array.FindIndex(providerNames, p => p.Equals(profile.Provider, StringComparison.OrdinalIgnoreCase));
+            if (providerIndex >= 0)
+            {
+                ProviderIndex = providerIndex;
+            }
+            
+            // Load provider-specific fields
+            switch (profile.Provider.ToLower())
+            {
+                case "sqlserver":
+                    SqlServerServer = profile.Server;
+                    SqlServerDatabase = profile.Database;
+                    SqlServerUsername = profile.Username;
+                    _sqlServerPassword = profile.Password;
+                    if (SqlServerPasswordBox != null)
+                        SqlServerPasswordBox.Password = profile.Password;
+                    if (SqlServerWindowsAuthRadioButton != null && SqlServerSqlAuthRadioButton != null)
+                    {
+                        SqlServerWindowsAuthRadioButton.IsChecked = profile.UseWindowsAuth;
+                        SqlServerSqlAuthRadioButton.IsChecked = !profile.UseWindowsAuth;
+                    }
+                    if (SqlServerTrustCertCheckBox != null)
+                        SqlServerTrustCertCheckBox.IsChecked = profile.TrustServerCertificate;
+                    break;
+                    
+                case "mysql":
+                    MySqlServer = profile.Server;
+                    MySqlDatabase = profile.Database;
+                    MySqlUsername = profile.Username;
+                    MySqlPort = profile.Port > 0 ? profile.Port.ToString() : "3306";
+                    _mySqlPassword = profile.Password;
+                    if (MySqlPasswordBox != null)
+                        MySqlPasswordBox.Password = profile.Password;
+                    if (MySqlSslCheckBox != null)
+                        MySqlSslCheckBox.IsChecked = profile.UseSsl;
+                    break;
+                    
+                case "postgresql":
+                    PostgreSqlHost = profile.Server;
+                    PostgreSqlDatabase = profile.Database;
+                    PostgreSqlUsername = profile.Username;
+                    PostgreSqlPort = profile.Port > 0 ? profile.Port.ToString() : "5432";
+                    _postgreSqlPassword = profile.Password;
+                    if (PostgreSqlPasswordBox != null)
+                        PostgreSqlPasswordBox.Password = profile.Password;
+                    if (PostgreSqlSslCheckBox != null)
+                        PostgreSqlSslCheckBox.IsChecked = profile.UseSsl;
+                    break;
+                    
+                case "firebird":
+                    FirebirdDatabaseFile = profile.DatabasePath;
+                    FirebirdUsername = profile.Username;
+                    _firebirdPassword = profile.Password;
+                    if (FirebirdPasswordBox != null)
+                        FirebirdPasswordBox.Password = profile.Password;
+                    if (FirebirdReadOnlyCheckBox != null)
+                        FirebirdReadOnlyCheckBox.IsChecked = profile.ReadOnlyConnection;
+                    if (FirebirdFormatComboBox != null)
+                        FirebirdFormatComboBox.SelectedIndex = profile.FirebirdVersion == "3.0" ? 0 : 1;
+                    break;
+            }
+            
+            // Update connection string
+            UpdateConnectionString();
+        }
+
+        #endregion
+
+        #region Shared Profile System
+
+        public void SetSharedProfileManager(ConnectionProfileManager sharedManager, Action<ConnectionProfile?, string> profileChangedCallback)
+        {
+            _profileManager = sharedManager;
+            _sharedProfileChangedCallback = profileChangedCallback;
+            
+            // Determine tab identifier from parent window context
+            _tabIdentifier = DetermineTabIdentifier();
+            
+            // Reload profiles from shared manager
+            if (IsLoaded)
+            {
+                LoadProfiles();
+            }
+        }
+
+        public void LoadSharedProfile(ConnectionProfile profile)
+        {
+            _isLoadingProfile = true;
+            try
+            {
+                // Load the profile without triggering the shared callback
+                LoadProfileIntoFields(profile);
+                
+                // Update the selected item in the dropdown
+                if (ProfileComboBox?.ItemsSource is List<ConnectionProfile> profiles)
+                {
+                    var matchingProfile = profiles.FirstOrDefault(p => p.Name == profile.Name);
+                    if (matchingProfile != null)
+                    {
+                        ProfileComboBox.SelectedItem = matchingProfile;
+                    }
+                }
+            }
+            finally
+            {
+                _isLoadingProfile = false;
+            }
+        }
+
+        private string DetermineTabIdentifier()
+        {
+            // Try to determine which tab this control belongs to based on parent context
+            var parent = Parent;
+            while (parent != null)
+            {
+                if (parent is FrameworkElement element && element.Name != null)
+                {
+                    if (element.Name.Contains("Export")) return "Export";
+                    if (element.Name.Contains("Import")) return "Import";
+                    if (element.Name.Contains("Schema")) return "Schema";
+                }
+                parent = LogicalTreeHelper.GetParent(parent);
+            }
+            
+            // Fallback - try to determine from connection string property bindings or naming
+            return "Unknown";
+        }
+
+        private void NotifySharedProfileChanged(ConnectionProfile? profile)
+        {
+            _sharedProfileChangedCallback?.Invoke(profile, _tabIdentifier);
+        }
+
+        public void ClearProfile()
+        {
+            _isLoadingProfile = true;
+            try
+            {
+                // Reset the dropdown to the first item (select a profile...)
+                if (ProfileComboBox?.ItemsSource is List<ConnectionProfile> profiles && profiles.Count > 0)
+                {
+                    ProfileComboBox.SelectedIndex = 0;
+                }
+            }
+            finally
+            {
+                _isLoadingProfile = false;
+            }
+        }
+
+        #endregion
 
     }
 }

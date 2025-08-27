@@ -273,7 +273,46 @@ The solution consists of a single main project:
 
 ### Connection String Control
 
-The `ConnectionStringControl` in the Controls folder provides a unified interface for configuring database connections across all supported providers. Key behaviors:
+The `ConnectionStringControl` in the Controls folder provides a unified interface for configuring database connections across all supported providers, with advanced profile management capabilities. Key features:
+
+#### Connection Profile Management
+
+The control now includes comprehensive profile management:
+
+- **Profile Dropdown**: Select from saved connection profiles with visual indicators (name, provider, server)
+- **Save Profile Button (💾)**: Save current connection settings as a reusable profile
+- **Manage Profiles Button (📋)**: Open the profile manager for advanced operations
+- **Automatic Profile Loading**: Profiles populate connection fields and update last-used timestamps
+- **Encrypted Storage**: Passwords are encrypted using AES encryption with per-machine keys
+- **Import/Export**: Profiles can be exported for sharing (without passwords) and imported
+
+#### Profile Manager Features
+
+- **Profile Filtering**: Search profiles by name, provider, or server
+- **Profile Details**: View comprehensive information about selected profiles
+- **Profile Operations**: Edit, duplicate, delete profiles with confirmation dialogs
+- **Recent Profiles**: Automatic tracking of last-used timestamps
+- **Bulk Operations**: Import/export multiple profiles as JSON files
+
+#### Shared Profile System
+
+The application now features a unified profile system that works across all tabs:
+
+- **Cross-Tab Synchronization**: When you select a profile in any tab (Export/Import/Schema), it automatically loads in all other tabs
+- **Global Profile Indicator**: A prominent banner shows the currently active profile across all operations
+- **One-Click Profile Management**: Save a profile once, use it everywhere
+- **Automatic Cache Invalidation**: Table caches are cleared when switching profiles to ensure consistency
+- **Profile Clear Function**: One button to clear the active profile from all tabs
+- **Visual Feedback**: Clear indicators show which profile is active and when profiles change
+
+#### Workflow Benefits
+
+- **Consistent Operations**: Ensure Export, Import, and Schema operations use the same database
+- **Reduced Configuration**: Configure connection once, use across all operations  
+- **Error Prevention**: Eliminates mistakes from manually entering connections multiple times
+- **Efficiency**: Quick switching between development, staging, and production environments
+
+#### Connection Provider Behaviors
 
 1. **SQL Server Provider**:
    - Defaults to "LocalHost" as server name
