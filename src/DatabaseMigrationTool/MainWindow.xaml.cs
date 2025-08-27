@@ -1,6 +1,7 @@
 using DatabaseMigrationTool.Models;
 using DatabaseMigrationTool.Providers;
 using DatabaseMigrationTool.Services;
+using DatabaseMigrationTool.Utilities;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
@@ -27,6 +28,9 @@ namespace DatabaseMigrationTool
         // Shared profile management
         private readonly ConnectionProfileManager _sharedProfileManager;
         private ConnectionProfile? _currentSharedProfile;
+        
+        // Enhanced error handling and recovery
+        private readonly OperationRecoveryService _recoveryService;
 
         private string ExportConnectionString => GetExportConnectionString();
 
@@ -42,8 +46,14 @@ namespace DatabaseMigrationTool
         {
             InitializeComponent();
             
+            // Initialize error handling system
+            ErrorHandler.Initialize();
+            
             // Initialize shared profile manager
             _sharedProfileManager = new ConnectionProfileManager();
+            
+            // Initialize recovery service
+            _recoveryService = new OperationRecoveryService();
             
             // Initialize provider ComboBoxes
             var providers = DatabaseProviderFactory.GetSupportedProviders();
@@ -401,21 +411,16 @@ namespace DatabaseMigrationTool
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            string errorMessage;
-                            string detailMessage = ex.Message;
+                            var errorInfo = ErrorHandler.HandleError(ex, "Database Export", showUserMessage: false);
                             
-                            // Check for specific error types and provide more user-friendly messages
-                            if (ex.Message.Contains("were not found in the database"))
+                            // Show enhanced error message with recovery options
+                            var message = errorInfo.Message;
+                            if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
                             {
-                                errorMessage = "Invalid Table Name Error";
-                                detailMessage = ex.Message;
-                            }
-                            else
-                            {
-                                errorMessage = "Export Error";
+                                message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
                             }
                             
-                            System.Windows.MessageBox.Show($"Error during export: {detailMessage}", errorMessage, MessageBoxButton.OK, MessageBoxImage.Error);
+                            System.Windows.MessageBox.Show(message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
                         });
                         throw;
                     }
@@ -423,14 +428,34 @@ namespace DatabaseMigrationTool
             }
             catch (Exception ex)
             {
+                var errorInfo = ErrorHandler.HandleError(ex, "Export Operation", showUserMessage: false);
                 StatusTextBlock.Text = "Export failed.";
                 
                 // Reset progress UI
                 Dispatcher.Invoke(() =>
                 {
                     ExportProgressBar.IsIndeterminate = false;
-                    ExportProgressText.Text = $"Export failed: {ex.Message}";
+                    ExportProgressText.Text = $"Export failed: {errorInfo.Message}";
                 });
+                
+                // Offer recovery options for recoverable errors
+                if (errorInfo.IsRecoverable)
+                {
+                    var result = MessageBox.Show(
+                        $"Export failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
+                        "Export Failed - Recovery Available", 
+                        MessageBoxButton.YesNo, 
+                        MessageBoxImage.Question);
+                    
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        // Retry after a delay
+                        _ = Task.Delay(2000).ContinueWith(_ => 
+                        {
+                            Dispatcher.Invoke(() => StartExport(this, new RoutedEventArgs()));
+                        });
+                    }
+                }
             }
             finally
             {
@@ -605,21 +630,16 @@ namespace DatabaseMigrationTool
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            string errorMessage;
-                            string detailMessage = ex.Message;
+                            var errorInfo = ErrorHandler.HandleError(ex, "Database Import", showUserMessage: false);
                             
-                            // Check for specific error types and provide more user-friendly messages
-                            if (ex.Message.Contains("were not found in the export data"))
+                            // Show enhanced error message with recovery options
+                            var message = errorInfo.Message;
+                            if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
                             {
-                                errorMessage = "Invalid Table Name Error";
-                                detailMessage = ex.Message;
-                            }
-                            else
-                            {
-                                errorMessage = "Import Error";
+                                message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
                             }
                             
-                            System.Windows.MessageBox.Show($"Error during import: {detailMessage}", errorMessage, MessageBoxButton.OK, MessageBoxImage.Error);
+                            System.Windows.MessageBox.Show(message, "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
                         });
                         throw;
                     }
@@ -627,14 +647,34 @@ namespace DatabaseMigrationTool
             }
             catch (Exception ex)
             {
+                var errorInfo = ErrorHandler.HandleError(ex, "Import Operation", showUserMessage: false);
                 StatusTextBlock.Text = "Import failed.";
                 
                 // Reset progress UI
                 Dispatcher.Invoke(() =>
                 {
                     ImportProgressBar.IsIndeterminate = false;
-                    ImportProgressText.Text = $"Import failed: {ex.Message}";
+                    ImportProgressText.Text = $"Import failed: {errorInfo.Message}";
                 });
+                
+                // Offer recovery options for recoverable errors
+                if (errorInfo.IsRecoverable)
+                {
+                    var result = MessageBox.Show(
+                        $"Import failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
+                        "Import Failed - Recovery Available", 
+                        MessageBoxButton.YesNo, 
+                        MessageBoxImage.Question);
+                    
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        // Retry after a delay
+                        _ = Task.Delay(2000).ContinueWith(_ => 
+                        {
+                            Dispatcher.Invoke(() => StartImport(this, new RoutedEventArgs()));
+                        });
+                    }
+                }
             }
             finally
             {
@@ -1001,6 +1041,182 @@ namespace DatabaseMigrationTool
             _lastConnectionInfo.Clear();
             
             StatusTextBlock.Text = "Profile cleared from all tabs";
+        }
+
+        #endregion
+        
+        #region Recovery Operations
+
+        private void ResumeOperations_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var recoveryWindow = new RecoveryWindow
+                {
+                    Owner = this
+                };
+                
+                if (recoveryWindow.ShowDialog() == true && recoveryWindow.SelectedOperation != null)
+                {
+                    var operation = recoveryWindow.SelectedOperation;
+                    
+                    // Switch to the appropriate tab
+                    if (operation.OperationType == "Export")
+                    {
+                        // Switch to export tab and resume export
+                        // Implementation depends on your tab control structure
+                        ResumeExportOperation(operation);
+                    }
+                    else if (operation.OperationType == "Import")
+                    {
+                        // Switch to import tab and resume import
+                        ResumeImportOperation(operation);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to open recovery window: {ex.Message}", 
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        
+        private async void ResumeExportOperation(OperationState operation)
+        {
+            try
+            {
+                StatusTextBlock.Text = $"Resuming export operation: {operation.OperationId}";
+
+                // Validate operation before resume
+                if (!_recoveryService.ValidateOperationForResume(operation))
+                {
+                    MessageBox.Show("Operation cannot be resumed. It may be corrupted or completed.",
+                        "Resume Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Show progress UI
+                ExportProgressGroupBox.Visibility = Visibility.Visible;
+                ExportButton.IsEnabled = false;
+                ExportProgressBar.IsIndeterminate = true;
+                ExportProgressText.Text = "Resuming export...";
+
+                // Get provider
+                string providerName = GetSelectedProviderName(ExportProviderIndex);
+                var provider = DatabaseProviderFactory.Create(providerName);
+
+                // Create progress reporter
+                ProgressReportHandler progressReporter = (progress) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ExportProgressBar.IsIndeterminate = progress.IsIndeterminate;
+                        if (!progress.IsIndeterminate)
+                        {
+                            ExportProgressBar.Value = progress.Current;
+                            ExportProgressBar.Maximum = progress.Total;
+                        }
+                        ExportProgressText.Text = progress.Message;
+                        StatusTextBlock.Text = progress.Message;
+                    });
+                };
+
+                // Resume export operation
+                bool success = await _recoveryService.ResumeExportOperationAsync(
+                    operation, provider, operation.ConnectionString, progressReporter);
+
+                if (success)
+                {
+                    StatusTextBlock.Text = "Export operation resumed and completed successfully!";
+                    ExportProgressText.Text = "Export completed successfully!";
+                    MessageBox.Show("Export operation completed successfully!", "Resume Complete",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    StatusTextBlock.Text = "Failed to resume export operation.";
+                    ExportProgressText.Text = "Export resume failed.";
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorHandler.HandleError(ex, "Resume Export Operation");
+                StatusTextBlock.Text = "Export resume failed.";
+                ExportProgressText.Text = $"Export resume failed: {ex.Message}";
+            }
+            finally
+            {
+                ExportButton.IsEnabled = true;
+            }
+        }
+        
+        private async void ResumeImportOperation(OperationState operation)
+        {
+            try
+            {
+                StatusTextBlock.Text = $"Resuming import operation: {operation.OperationId}";
+
+                // Validate operation before resume
+                if (!_recoveryService.ValidateOperationForResume(operation))
+                {
+                    MessageBox.Show("Operation cannot be resumed. It may be corrupted or completed.",
+                        "Resume Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Show progress UI
+                ImportProgressGroupBox.Visibility = Visibility.Visible;
+                ImportButton.IsEnabled = false;
+                ImportProgressBar.IsIndeterminate = true;
+                ImportProgressText.Text = "Resuming import...";
+
+                // Get provider
+                string providerName = GetSelectedProviderName(ImportProviderIndex);
+                var provider = DatabaseProviderFactory.Create(providerName);
+
+                // Create progress reporter
+                ProgressReportHandler progressReporter = (progress) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ImportProgressBar.IsIndeterminate = progress.IsIndeterminate;
+                        if (!progress.IsIndeterminate)
+                        {
+                            ImportProgressBar.Value = progress.Current;
+                            ImportProgressBar.Maximum = progress.Total;
+                        }
+                        ImportProgressText.Text = progress.Message;
+                        StatusTextBlock.Text = progress.Message;
+                    });
+                };
+
+                // Resume import operation
+                bool success = await _recoveryService.ResumeImportOperationAsync(
+                    operation, provider, operation.ConnectionString, progressReporter);
+
+                if (success)
+                {
+                    StatusTextBlock.Text = "Import operation resumed and completed successfully!";
+                    ImportProgressText.Text = "Import completed successfully!";
+                    MessageBox.Show("Import operation completed successfully!", "Resume Complete",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    StatusTextBlock.Text = "Failed to resume import operation.";
+                    ImportProgressText.Text = "Import resume failed.";
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorHandler.HandleError(ex, "Resume Import Operation");
+                StatusTextBlock.Text = "Import resume failed.";
+                ImportProgressText.Text = $"Import resume failed: {ex.Message}";
+            }
+            finally
+            {
+                ImportButton.IsEnabled = true;
+            }
         }
 
         #endregion

@@ -18,7 +18,18 @@
 
         <!-- Header -->
         <Border Grid.Row="0" Background="#0078D7" Padding="15">
-            <TextBlock Text="Database Migration Tool" FontSize="22" FontWeight="SemiBold" Foreground="White" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <TextBlock Grid.Column="0" Text="Database Migration Tool" FontSize="22" FontWeight="SemiBold" Foreground="White" />
+                
+                <Button Grid.Column="1" Content="📋 Resume Operations" Background="Transparent" Foreground="White" 
+                       BorderBrush="White" BorderThickness="1" Padding="10,5" Click="ResumeOperations_Click"
+                       ToolTip="Resume interrupted export/import operations"/>
+            </Grid>
         </Border>
 
         <!-- Global Profile Indicator -->
