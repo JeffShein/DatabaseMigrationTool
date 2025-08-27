@@ -236,7 +236,9 @@
                             </Grid>
                         </GroupBox>
 
-                        <Button x:Name="ImportButton" Content="Start Import" HorizontalAlignment="Center" Padding="20,10" Click="StartImport"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Button x:Name="ImportButton" Content="Start Import" Padding="20,10" Margin="5,0" Click="StartImport"/>
+                        </StackPanel>
                         
                         <!-- Import Progress -->
                         <GroupBox Header="Import Progress" Margin="0,15,0,0" x:Name="ImportProgressGroupBox" Visibility="Collapsed">
