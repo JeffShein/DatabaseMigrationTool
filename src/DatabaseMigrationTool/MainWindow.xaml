@@ -88,10 +88,13 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBox Grid.Column="0" x:Name="ExportTableCriteriaFileTextBox" Margin="5"
                                              ToolTip="Path to JSON file with table criteria"/>
                                     <Button Grid.Column="1" Content="Browse..." Margin="5" Padding="10,0" Click="BrowseTableCriteriaFile"/>
+                                    <Button Grid.Column="2" Content="Helper..." Margin="5" Padding="10,0" Click="OpenCriteriaHelper" 
+                                            ToolTip="Create criteria file from selected tables"/>
                                 </Grid>
 
                                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch Size:" VerticalAlignment="Center"/>

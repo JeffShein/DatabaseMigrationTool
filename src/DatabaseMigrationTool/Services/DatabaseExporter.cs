@@ -174,6 +174,7 @@ namespace DatabaseMigrationTool.Services
                 if (_options.TableCriteria != null && _options.TableCriteria.TryGetValue(table.Name, out var criteria))
                 {
                     whereClause = criteria;
+                    Log($"Applying criteria for table {table.Name}: {whereClause}");
                 }
                 
                 string safeTableName = table?.FullName ?? $"table_{tableCount}";
@@ -323,6 +324,7 @@ namespace DatabaseMigrationTool.Services
                         }
                         
                         Log($"Attempting to count rows in Firebird table {tableSchema.FullName}");
+                        Log($"Firebird count SQL: {countSql}");
                         try
                         {
                             using (var countCommand = directConnection.CreateCommand())
@@ -366,6 +368,7 @@ namespace DatabaseMigrationTool.Services
                         
                         // Try to get row count, handle permission errors gracefully
                         Log($"Executing count query for table {tableSchema.FullName}");
+                        Log($"Count SQL: {countSql}");
                         try
                         {
                             using (var countCommand = directConnection.CreateCommand())
@@ -514,7 +517,7 @@ namespace DatabaseMigrationTool.Services
                                 // Add WHERE clause if needed
                                 if (!string.IsNullOrEmpty(whereClause))
                                 {
-                                    dataSql = dataSql.Replace("'", $" WHERE {whereClause}'");
+                                    dataSql += $" WHERE {whereClause}";
                                 }
                                 
                                 // For Firebird, we'll limit results in memory rather than using SQL pagination
@@ -533,6 +536,8 @@ namespace DatabaseMigrationTool.Services
                                 {
                                     dataSql += $" WHERE {whereClause}";
                                 }
+                                
+                                Log($"Generated data SQL: {dataSql}");
                             }
                             
                             // Add ORDER BY clause if we have primary keys for consistent ordering

@@ -2,6 +2,7 @@ using DatabaseMigrationTool.Models;
 using DatabaseMigrationTool.Providers;
 using DatabaseMigrationTool.Services;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -13,6 +14,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls;
 using System.Globalization;
+using DatabaseMigrationTool.Controls;
 
 namespace DatabaseMigrationTool
 {
@@ -103,6 +105,151 @@ namespace DatabaseMigrationTool
             if (dialog.ShowDialog() == true)
             {
                 ExportTableCriteriaFileTextBox.Text = dialog.FileName;
+            }
+        }
+
+        private async void OpenCriteriaHelper(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Get the selected provider and connection
+                string providerName = GetSelectedProviderName(ExportProviderIndex);
+                var connectionString = ExportConnectionString;
+                
+                if (string.IsNullOrEmpty(providerName))
+                {
+                    MessageBox.Show("Please select a database provider first.", "Provider Required", 
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    MessageBox.Show("Please configure the database connection first.", "Connection Required", 
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // Get the selected tables
+                var selectedTablesText = ExportTablesTextBox.Text?.Trim();
+                var criteriaFilePath = ExportTableCriteriaFileTextBox.Text?.Trim();
+                List<string>? selectedTableNames = null;
+                
+                if (!string.IsNullOrEmpty(selectedTablesText))
+                {
+                    selectedTableNames = selectedTablesText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                }
+
+                // Validate that tables are selected
+                if (selectedTableNames?.Any() != true)
+                {
+                    MessageBox.Show(
+                        "Please select tables first using the 'Browse...' button.\n\n" +
+                        "The helper needs to know which tables you want to create criteria for.",
+                        "No Tables Selected", 
+                        MessageBoxButton.OK, 
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                // Show loading
+                var loadingSpinner = new LoadingSpinner();
+                var loadingWindow = new Window
+                {
+                    Content = loadingSpinner,
+                    Title = "Loading Table Information...",
+                    Width = 300,
+                    Height = 150,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Owner = this,
+                    ResizeMode = ResizeMode.NoResize
+                };
+
+                loadingSpinner.StartSpinning();
+                loadingWindow.Show();
+
+                try
+                {
+                    // Get table schemas in background
+                    var tables = new List<TableSchema>();
+                    var tableColumns = new Dictionary<string, List<Models.ColumnDefinition>>();
+
+                    await Task.Run(async () =>
+                    {
+                        var provider = DatabaseProviderFactory.Create(providerName);
+                        using var connection = provider.CreateConnection(connectionString);
+                        await connection.OpenAsync();
+
+                        // Get all tables or just selected ones
+                        var allTables = await provider.GetTablesAsync(connection);
+                        
+                        if (selectedTableNames?.Any() == true)
+                        {
+                            // Filter to only selected tables
+                            tables = allTables.Where(t => selectedTableNames.Contains(t.Name, StringComparer.OrdinalIgnoreCase) ||
+                                                         selectedTableNames.Contains(t.FullName, StringComparer.OrdinalIgnoreCase))
+                                           .ToList();
+                        }
+                        else
+                        {
+                            tables = allTables;
+                        }
+
+                        // Get columns for each table
+                        foreach (var table in tables)
+                        {
+                            try
+                            {
+                                var columns = await provider.GetColumnsAsync(connection, table.Name, table.Schema);
+                                tableColumns[table.Name] = columns;
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log error but continue with other tables
+                                System.Diagnostics.Debug.WriteLine($"Failed to get columns for table {table.Name}: {ex.Message}");
+                                tableColumns[table.Name] = new List<Models.ColumnDefinition>();
+                            }
+                        }
+                    });
+
+                    loadingWindow.Close();
+
+                    if (!tables.Any())
+                    {
+                        MessageBox.Show("No tables found. Please select tables first or check your connection.", 
+                            "No Tables", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+
+                    // Get existing criteria file path
+                    var existingCriteriaPath = ExportTableCriteriaFileTextBox.Text?.Trim();
+                    
+                    // Open the criteria helper window
+                    var helperWindow = new CriteriaHelperWindow(tables, tableColumns, existingCriteriaPath)
+                    {
+                        Owner = this
+                    };
+
+                    if (helperWindow.ShowDialog() == true && !string.IsNullOrEmpty(helperWindow.SavedFilePath))
+                    {
+                        // Update the criteria file path
+                        ExportTableCriteriaFileTextBox.Text = helperWindow.SavedFilePath;
+                        MessageBox.Show($"Criteria file saved successfully!\n\nPath: {helperWindow.SavedFilePath}", 
+                            "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                }
+                finally
+                {
+                    if (loadingWindow.IsVisible)
+                    {
+                        loadingWindow.Close();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to load table information: {ex.Message}", "Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -663,9 +810,9 @@ namespace DatabaseMigrationTool
 
         #region Table Selection Event Handlers
 
-        private async void BrowseExportTables_Click(object sender, RoutedEventArgs e)
+        private void BrowseExportTables_Click(object sender, RoutedEventArgs e)
         {
-            await BrowseTables(ExportConnectionControl, ExportTablesTextBox, "export");
+            BrowseTables(ExportConnectionControl, ExportTablesTextBox, "export");
         }
 
         private void ClearExportTables_Click(object sender, RoutedEventArgs e)
@@ -673,9 +820,9 @@ namespace DatabaseMigrationTool
             ExportTablesTextBox.Text = string.Empty;
         }
 
-        private async void BrowseImportTables_Click(object sender, RoutedEventArgs e)
+        private void BrowseImportTables_Click(object sender, RoutedEventArgs e)
         {
-            await BrowseTables(ImportConnectionControl, ImportTablesTextBox, "import");
+            BrowseTables(ImportConnectionControl, ImportTablesTextBox, "import");
         }
 
         private void ClearImportTables_Click(object sender, RoutedEventArgs e)
@@ -683,9 +830,9 @@ namespace DatabaseMigrationTool
             ImportTablesTextBox.Text = string.Empty;
         }
 
-        private async void BrowseSchemaTables_Click(object sender, RoutedEventArgs e)
+        private void BrowseSchemaTables_Click(object sender, RoutedEventArgs e)
         {
-            await BrowseTables(SchemaConnectionControl, SchemaTablesTextBox, "schema");
+            BrowseTables(SchemaConnectionControl, SchemaTablesTextBox, "schema");
         }
 
         private void ClearSchemaTables_Click(object sender, RoutedEventArgs e)
@@ -693,7 +840,7 @@ namespace DatabaseMigrationTool
             SchemaTablesTextBox.Text = string.Empty;
         }
 
-        private async Task BrowseTables(Controls.ConnectionStringControl connectionControl, TextBox tablesTextBox, string operation)
+        private void BrowseTables(Controls.ConnectionStringControl connectionControl, TextBox tablesTextBox, string operation)
         {
             try
             {

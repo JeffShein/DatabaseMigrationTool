@@ -94,22 +94,24 @@ dotnet run -- debug-analyze-file --file ./export_output/table_data_Orders.bin
 
 # Validate export/import on a single table (troubleshooting)
 dotnet run -- validate-ei --provider sqlserver --connection "Server=localhost;Database=SourceDB;User Id=sa;Password=P@ssw0rd;TrustServerCertificate=True;" --table "dbo.Customers" --verbose
+
+# Diagnose connection and provider issues
+dotnet run -- diagnose --provider firebird --connection "DataSource=localhost;Database=C:\firebird\data\mydb.fdb;User=SYSDBA;Password=masterkey;"
 ```
 
 ### Testing
 
+Currently, this project does not have automated tests configured. When adding tests:
+
 ```bash
-# Run all tests
+# Run all tests (when test projects exist)
 dotnet test
-
-# Run tests for a specific project
-dotnet test src/FirebirdProvider.Tests
-
-# Run a specific test (example pattern)
-dotnet test --filter "FullyQualifiedName=FirebirdProvider.Tests.FirebirdProviderTests.Should_ConnectToDatabase"
 
 # Run tests with detailed output
 dotnet test -v normal
+
+# Run specific tests by filter
+dotnet test --filter "TestMethodName"
 ```
 
 ## Project Architecture
@@ -182,8 +184,20 @@ The application follows a provider-based architecture where different database s
 ### Modes of Operation
 
 1. **GUI Mode**: WPF-based user interface for interactive use
+   - Main tabbed interface for Export, Import, and Schema operations
+   - Table selection browser with search and multi-select capabilities
+   - Connection string builder with provider-specific defaults
+   - Loading spinners for long-running operations
+   - Schema view window for examining database structures
+   - Firebird database explorer window for .fdb file browsing
+
 2. **Console Mode**: Command-line interface with interactive menu
+   - Run with `--console` flag for menu-driven operation
+   - Provides guided workflows for common operations
+
 3. **Command Line Mode**: Direct command processing for scripting and automation
+   - Supports all export, import, schema, and utility operations
+   - Designed for batch processing and CI/CD integration
 
 ### Special Utility Functions
 
@@ -215,26 +229,37 @@ The solution consists of a single main project:
    - Use the `SetLogger` method to handle logging within provider implementations
    - When implementing new database providers, follow existing patterns in the codebase
 
-2. **Firebird Provider**:
+2. **Application Entry Point**:
+   - Program.cs handles both WPF GUI mode and console command-line mode
+   - Uses `[STAThread]` attribute for WPF compatibility
+   - Special handling for utility commands like `dump-file` and `debug-analyze-file`
+   - CommandLineParser library processes command-line arguments with verb-based commands
+
+3. **Firebird Provider**:
    - The Firebird provider supports both Firebird 2.5 and 3+ versions
    - It uses auto-detection to determine the version based on database file format
    - Implements specialized version handling to maximize compatibility
    - Connection strings for Firebird can include a Version parameter to explicitly set the version
 
-3. **Error Handling**:
+4. **Error Handling**:
    - Log detailed errors to help diagnose issues
    - Include inner exception details where appropriate
    - Use the `ContinueOnError` flag to control error behavior during import operations
 
-4. **Testing**:
-   - Tests use xUnit framework with ITestOutputHelper for logging
-   - Include both positive tests and error-handling tests
+5. **Testing**:
+   - Currently no test framework is configured
+   - When adding tests, consider using xUnit with ITestOutputHelper for logging
    - Use descriptive test names following the pattern `[Class]_Should[ExpectedBehavior]`
 
-5. **Command Handling**:
+6. **Command Handling**:
    - Each command implements a static `Execute` method
    - Command parameters are defined using the `CommandLineParser` attribute system
    - Return appropriate exit codes (0 for success, non-zero for failures)
+
+7. **Serialization Strategy**:
+   - Uses MessagePack for efficient binary serialization of database objects
+   - Applies compression (GZip/BZip2) to reduce file sizes significantly
+   - Separates metadata and data files for better organization and performance
 
 ## Working with the Code
 
