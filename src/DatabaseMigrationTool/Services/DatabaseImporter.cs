@@ -125,34 +125,28 @@ namespace DatabaseMigrationTool.Services
             // Report progress
             ReportProgress(5, 100, "Checking input directory...");
             
-            // Read metadata file
-            string metadataPath = Path.Combine(inputPath, "metadata.bin");
-            if (!File.Exists(metadataPath))
-            {
-                Log($"ERROR: Metadata file not found: {metadataPath}", true);
-                throw new FileNotFoundException("Metadata file not found", metadataPath);
-            }
-
+            // Read metadata
             DatabaseExport export;
-            Log($"Reading metadata file: {metadataPath}");
-            var fileInfo = new FileInfo(metadataPath);
-            Log($"Metadata file size: {fileInfo.Length} bytes");
             
             try
             {
-                using (var fs = File.OpenRead(metadataPath))
-                using (var decompressor = new BZip2Stream(fs, SharpCompress.Compressors.CompressionMode.Decompress, true))
+                if (!Utilities.MetadataManager.IsValidExport(inputPath))
                 {
-                    export = await Task.Run(() => MessagePackSerializer.Deserialize<DatabaseExport>(decompressor));
+                    Log($"ERROR: Directory does not contain a valid export: {inputPath}", true);
+                    throw new InvalidOperationException($"Invalid export format. Expected valid export in: {inputPath}");
                 }
+
+                Log("Reading metadata...");
+                export = await Utilities.MetadataManager.ReadMetadataAsync(inputPath);
+                Log($"Successfully read metadata: {export.Schemas?.Count ?? 0} tables");
                 
                 Log($"Export database name: {export.DatabaseName}");
-                Log($"Export tables count: {export.Schemas.Count}");
+                Log($"Export tables count: {export.Schemas?.Count ?? 0}");
                 Log($"Export date: {export.ExportDate}");
             }
             catch (Exception ex)
             {
-                Log($"Failed to read metadata file: {ex.Message}");
+                Log($"Failed to read metadata: {ex.Message}");
                 Log($"Stack trace: {ex.StackTrace}");
                 throw;
             }
@@ -200,9 +194,14 @@ namespace DatabaseMigrationTool.Services
                 // Filter tables if specified
                 if (_options.Tables != null && _options.Tables.Any())
                 {
-                    // Check if all specified tables exist in the export
-                    var availableTableNames = tablesToImport.Select(t => t.Name.ToLowerInvariant()).ToHashSet();
-                    var missingTables = _options.Tables.Where(t => !availableTableNames.Contains(t.ToLowerInvariant())).ToList();
+                    // Check if all specified tables exist in the export (check both Name and FullName)
+                    var availableTableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var table in tablesToImport)
+                    {
+                        availableTableNames.Add(table.Name);
+                        availableTableNames.Add(table.FullName);
+                    }
+                    var missingTables = _options.Tables.Where(t => !availableTableNames.Contains(t)).ToList();
                     
                     if (missingTables.Any())
                     {
@@ -213,7 +212,8 @@ namespace DatabaseMigrationTool.Services
                     
                     tablesToImport = tablesToImport
                         .Where(t => _options.Tables.Any(filterName => 
-                            t.Name.Equals(filterName, StringComparison.OrdinalIgnoreCase)))
+                            t.Name.Equals(filterName, StringComparison.OrdinalIgnoreCase) ||
+                            t.FullName.Equals(filterName, StringComparison.OrdinalIgnoreCase)))
                         .ToList();
                     
                     // Log the filter results

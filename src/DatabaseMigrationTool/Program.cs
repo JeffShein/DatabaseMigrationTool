@@ -605,6 +605,7 @@ namespace DatabaseMigrationTool
                 ExportCommandOptions,
                 ImportCommandOptions,
                 SchemaCommandOptions,
+                ConfigCommandOptions,
                 DiagnoseOptions,
                 ValidateExportImportOptions
             >(args)
@@ -613,6 +614,7 @@ namespace DatabaseMigrationTool
                 (ExportCommandOptions opts) => RunExportCommand(opts),
                 (ImportCommandOptions opts) => RunImportCommand(opts),
                 (SchemaCommandOptions opts) => RunSchemaCommand(opts),
+                (ConfigCommandOptions opts) => RunConfigCommand(opts),
                 (DiagnoseOptions opts) => DiagnoseCommand.Execute(opts),
                 (ValidateExportImportOptions opts) => ValidateExportImportCommand.Execute(opts),
                 errors => Task.FromResult(1)
@@ -634,6 +636,27 @@ namespace DatabaseMigrationTool
         {
             try
             {
+                // Load configuration file if specified and merge with command options
+                options = await LoadAndMergeExportConfigAsync(options);
+                
+                // Validate required parameters
+                if (string.IsNullOrEmpty(options.Provider))
+                {
+                    Console.Error.WriteLine("Error: Provider is required. Specify with --provider or in config file.");
+                    return 1;
+                }
+                
+                if (string.IsNullOrEmpty(options.ConnectionString))
+                {
+                    Console.Error.WriteLine("Error: Connection string is required. Specify with --connection or in config file.");
+                    return 1;
+                }
+                
+                if (string.IsNullOrEmpty(options.OutputPath))
+                {
+                    Console.Error.WriteLine("Error: Output path is required. Specify with --output or in config file.");
+                    return 1;
+                }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
                 var connection = provider.CreateConnection(options.ConnectionString);
                 
@@ -653,6 +676,60 @@ namespace DatabaseMigrationTool
                     IncludeSchemaOnly = options.SchemaOnly
                 };
                 
+                // Check for existing export and get user confirmation
+                var tablesList = string.IsNullOrEmpty(options.Tables) 
+                    ? null 
+                    : options.Tables.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim()).ToList();
+                var overwriteResult = Utilities.ExportOverwriteChecker.CheckForTableSpecificOverwrite(options.OutputPath, tablesList);
+                
+                if (overwriteResult.HasExistingExport)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("⚠️  Export Already Exists");
+                    Console.WriteLine("=".PadRight(50, '='));
+                    Console.WriteLine("An export already exists in the selected directory.");
+                    Console.WriteLine(overwriteResult.GetSummaryText());
+                    Console.WriteLine();
+                    
+                    if (overwriteResult.ExistingFiles.Count > 0)
+                    {
+                        Console.WriteLine("Files that will be overwritten:");
+                        int displayCount = Math.Min(10, overwriteResult.ExistingFiles.Count);
+                        for (int i = 0; i < displayCount; i++)
+                        {
+                            Console.WriteLine($"  • {overwriteResult.ExistingFiles[i]}");
+                        }
+                        
+                        if (overwriteResult.ExistingFiles.Count > displayCount)
+                        {
+                            Console.WriteLine($"  ... and {overwriteResult.ExistingFiles.Count - displayCount} more files");
+                        }
+                        Console.WriteLine();
+                    }
+                    
+                    Console.Write("Do you want to overwrite the existing export? (y/N): ");
+                    string? response = Console.ReadLine();
+                    
+                    if (string.IsNullOrEmpty(response) || !response.Trim().ToLowerInvariant().StartsWith("y"))
+                    {
+                        Console.WriteLine("Export cancelled - existing files not overwritten.");
+                        return 1; // Exit with error code
+                    }
+                    
+                    // User confirmed overwrite - delete existing files
+                    Console.WriteLine("Deleting existing export files...");
+                    try
+                    {
+                        Utilities.ExportOverwriteChecker.DeleteExistingExport(options.OutputPath);
+                        Console.WriteLine("Existing export files deleted successfully.");
+                    }
+                    catch (Exception deleteEx)
+                    {
+                        Console.Error.WriteLine($"Error deleting existing files: {deleteEx.Message}");
+                        return 1; // Exit with error code
+                    }
+                }
+                
                 var exporter = new DatabaseExporter(provider, connection, exportOptions);
                 await exporter.ExportAsync(options.OutputPath);
                 
@@ -670,6 +747,27 @@ namespace DatabaseMigrationTool
         {
             try
             {
+                // Load configuration file if specified and merge with command options
+                options = await LoadAndMergeImportConfigAsync(options);
+                
+                // Validate required parameters
+                if (string.IsNullOrEmpty(options.Provider))
+                {
+                    Console.Error.WriteLine("Error: Provider is required. Specify with --provider or in config file.");
+                    return 1;
+                }
+                
+                if (string.IsNullOrEmpty(options.ConnectionString))
+                {
+                    Console.Error.WriteLine("Error: Connection string is required. Specify with --connection or in config file.");
+                    return 1;
+                }
+                
+                if (string.IsNullOrEmpty(options.InputPath))
+                {
+                    Console.Error.WriteLine("Error: Input path is required. Specify with --input or in config file.");
+                    return 1;
+                }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
                 var connection = provider.CreateConnection(options.ConnectionString);
                 
@@ -682,6 +780,58 @@ namespace DatabaseMigrationTool
                     SchemaOnly = options.SchemaOnly,
                     ContinueOnError = options.ContinueOnError
                 };
+                
+                // Check for existing data and get user confirmation
+                Console.WriteLine("Checking for existing data in target database...");
+                var overwriteResult = await Utilities.ImportOverwriteChecker.CheckForExistingDataAsync(
+                    provider, connection, options.InputPath, importOptions);
+                
+                if (overwriteResult.HasConflictingData)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("⚠️  Import Will Affect Existing Data");
+                    Console.WriteLine("=".PadRight(50, '='));
+                    Console.WriteLine("The import operation will affect existing tables and data in the target database:");
+                    Console.WriteLine();
+                    Console.WriteLine(overwriteResult.GetSummaryText());
+                    Console.WriteLine();
+                    
+                    if (overwriteResult.ConflictingTables.Any())
+                    {
+                        Console.WriteLine("Tables with conflicts:");
+                        foreach (var conflict in overwriteResult.ConflictingTables.Take(10))
+                        {
+                            Console.WriteLine($"  • {conflict.TableName}: {conflict.GetDescription()}");
+                        }
+                        
+                        if (overwriteResult.ConflictingTables.Count > 10)
+                        {
+                            Console.WriteLine($"  ... and {overwriteResult.ConflictingTables.Count - 10} more conflicting tables");
+                        }
+                        Console.WriteLine();
+                    }
+                    
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("⚠️ WARNING: This operation may overwrite existing data or fail if tables already exist.");
+                    Console.WriteLine("Make sure you have backups of important data before proceeding.");
+                    Console.ResetColor();
+                    Console.WriteLine();
+                    
+                    Console.Write("Do you want to proceed with the import? (y/N): ");
+                    string? response = Console.ReadLine();
+                    
+                    if (string.IsNullOrEmpty(response) || !response.Trim().ToLowerInvariant().StartsWith("y"))
+                    {
+                        Console.WriteLine("Import cancelled - existing data not overwritten.");
+                        return 1; // Exit with error code
+                    }
+                    
+                    Console.WriteLine("User confirmed import - proceeding with data overwrite...");
+                }
+                else if (!string.IsNullOrEmpty(overwriteResult.Message))
+                {
+                    Console.WriteLine($"Import analysis: {overwriteResult.Message}");
+                }
                 
                 var importer = new DatabaseImporter(provider, connection, importOptions);
                 await importer.ImportAsync(options.InputPath);
@@ -700,6 +850,21 @@ namespace DatabaseMigrationTool
         {
             try
             {
+                // Load configuration file if specified and merge with command options
+                options = await LoadAndMergeSchemaConfigAsync(options);
+                
+                // Validate required parameters
+                if (string.IsNullOrEmpty(options.Provider))
+                {
+                    Console.Error.WriteLine("Error: Provider is required. Specify with --provider or in config file.");
+                    return 1;
+                }
+                
+                if (string.IsNullOrEmpty(options.ConnectionString))
+                {
+                    Console.Error.WriteLine("Error: Connection string is required. Specify with --connection or in config file.");
+                    return 1;
+                }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
                 var connection = provider.CreateConnection(options.ConnectionString);
                 
@@ -779,6 +944,170 @@ namespace DatabaseMigrationTool
                 Console.WriteLine($"Generated script: {filePath}");
             }
         }
+        
+        // Configuration file helper methods
+        private static async Task<ExportCommandOptions> LoadAndMergeExportConfigAsync(ExportCommandOptions options)
+        {
+            if (string.IsNullOrEmpty(options.ConfigFile))
+            {
+                return options;
+            }
+            
+            try
+            {
+                var config = await Utilities.ConfigurationManager.LoadConfigurationAsync(options.ConfigFile);
+                
+                if (config.Export == null)
+                {
+                    Console.WriteLine($"Warning: Configuration file '{options.ConfigFile}' does not contain export configuration.");
+                    return options;
+                }
+                
+                // Merge config file values with command line options (command line takes precedence)
+                return new ExportCommandOptions
+                {
+                    ConfigFile = options.ConfigFile,
+                    Provider = !string.IsNullOrEmpty(options.Provider) ? options.Provider : config.Export.Provider,
+                    ConnectionString = !string.IsNullOrEmpty(options.ConnectionString) ? options.ConnectionString : config.Export.ConnectionString,
+                    OutputPath = !string.IsNullOrEmpty(options.OutputPath) ? options.OutputPath : config.Export.OutputPath,
+                    Tables = options.Tables ?? config.Export.Tables,
+                    TableCriteriaFile = options.TableCriteriaFile ?? config.Export.TableCriteriaFile,
+                    BatchSize = options.BatchSize != 100000 ? options.BatchSize : config.Export.BatchSize, // Check if user specified different batch size
+                    SchemaOnly = options.SchemaOnly || config.Export.SchemaOnly
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error loading configuration file '{options.ConfigFile}': {ex.Message}");
+                Environment.Exit(1);
+                return options; // Never reached
+            }
+        }
+        
+        private static async Task<ImportCommandOptions> LoadAndMergeImportConfigAsync(ImportCommandOptions options)
+        {
+            if (string.IsNullOrEmpty(options.ConfigFile))
+            {
+                return options;
+            }
+            
+            try
+            {
+                var config = await Utilities.ConfigurationManager.LoadConfigurationAsync(options.ConfigFile);
+                
+                if (config.Import == null)
+                {
+                    Console.WriteLine($"Warning: Configuration file '{options.ConfigFile}' does not contain import configuration.");
+                    return options;
+                }
+                
+                // Merge config file values with command line options (command line takes precedence)
+                return new ImportCommandOptions
+                {
+                    ConfigFile = options.ConfigFile,
+                    Provider = !string.IsNullOrEmpty(options.Provider) ? options.Provider : config.Import.Provider,
+                    ConnectionString = !string.IsNullOrEmpty(options.ConnectionString) ? options.ConnectionString : config.Import.ConnectionString,
+                    InputPath = !string.IsNullOrEmpty(options.InputPath) ? options.InputPath : config.Import.InputPath,
+                    Tables = options.Tables ?? config.Import.Tables,
+                    BatchSize = options.BatchSize != 100000 ? options.BatchSize : config.Import.BatchSize,
+                    NoCreateSchema = options.NoCreateSchema || config.Import.NoCreateSchema,
+                    NoCreateForeignKeys = options.NoCreateForeignKeys || config.Import.NoCreateForeignKeys,
+                    SchemaOnly = options.SchemaOnly || config.Import.SchemaOnly,
+                    ContinueOnError = options.ContinueOnError || config.Import.ContinueOnError
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error loading configuration file '{options.ConfigFile}': {ex.Message}");
+                Environment.Exit(1);
+                return options; // Never reached
+            }
+        }
+        
+        private static async Task<SchemaCommandOptions> LoadAndMergeSchemaConfigAsync(SchemaCommandOptions options)
+        {
+            if (string.IsNullOrEmpty(options.ConfigFile))
+            {
+                return options;
+            }
+            
+            try
+            {
+                var config = await Utilities.ConfigurationManager.LoadConfigurationAsync(options.ConfigFile);
+                
+                if (config.Schema == null)
+                {
+                    Console.WriteLine($"Warning: Configuration file '{options.ConfigFile}' does not contain schema configuration.");
+                    return options;
+                }
+                
+                // Merge config file values with command line options (command line takes precedence)
+                return new SchemaCommandOptions
+                {
+                    ConfigFile = options.ConfigFile,
+                    Provider = !string.IsNullOrEmpty(options.Provider) ? options.Provider : config.Schema.Provider,
+                    ConnectionString = !string.IsNullOrEmpty(options.ConnectionString) ? options.ConnectionString : config.Schema.ConnectionString,
+                    Tables = options.Tables ?? config.Schema.Tables,
+                    Verbose = options.Verbose || config.Schema.Verbose,
+                    ScriptOutput = options.ScriptOutput || config.Schema.GenerateScripts,
+                    ScriptPath = options.ScriptPath ?? config.Schema.ScriptPath
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error loading configuration file '{options.ConfigFile}': {ex.Message}");
+                Environment.Exit(1);
+                return options; // Never reached
+            }
+        }
+        
+        private static async Task<int> RunConfigCommand(ConfigCommandOptions options)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(options.CreateSamplePath))
+                {
+                    await Utilities.ConfigurationManager.CreateSampleConfigurationAsync(options.CreateSamplePath);
+                    Console.WriteLine($"Sample configuration file created: {options.CreateSamplePath}");
+                    return 0;
+                }
+                
+                if (!string.IsNullOrEmpty(options.ValidatePath))
+                {
+                    var isValid = await Utilities.ConfigurationManager.IsValidConfigurationFileAsync(options.ValidatePath);
+                    if (isValid)
+                    {
+                        Console.WriteLine($"✓ Configuration file is valid: {options.ValidatePath}");
+                        return 0;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"✗ Configuration file is invalid or corrupted: {options.ValidatePath}");
+                        return 1;
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(options.ShowPath))
+                {
+                    var config = await Utilities.ConfigurationManager.LoadConfigurationAsync(options.ShowPath);
+                    var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions
+                    {
+                        WriteIndented = true,
+                        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                    });
+                    Console.WriteLine(json);
+                    return 0;
+                }
+                
+                Console.Error.WriteLine("Error: No action specified. Use --create-sample, --validate, or --show");
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error: {ex.Message}");
+                return 1;
+            }
+        }
     }
 
     [Verb("providers", HelpText = "List available database providers")]
@@ -789,13 +1118,16 @@ namespace DatabaseMigrationTool
     [Verb("export", HelpText = "Export database schema and data")]
     public class ExportCommandOptions
     {
-        [Option('p', "provider", Required = true, HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
+        [Option("config", HelpText = "Load parameters from configuration file (JSON). Other options will override config file values.")]
+        public string? ConfigFile { get; set; }
+        
+        [Option('p', "provider", HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
         public string Provider { get; set; } = string.Empty;
         
-        [Option('c', "connection", Required = true, HelpText = "Connection string")]
+        [Option('c', "connection", HelpText = "Connection string")]
         public string ConnectionString { get; set; } = string.Empty;
         
-        [Option('o', "output", Required = true, HelpText = "Output directory path")]
+        [Option('o', "output", HelpText = "Output directory path")]
         public string OutputPath { get; set; } = string.Empty;
         
         [Option('t', "tables", HelpText = "Comma-separated list of tables to export (default: all tables)")]
@@ -814,13 +1146,16 @@ namespace DatabaseMigrationTool
     [Verb("import", HelpText = "Import database schema and data")]
     public class ImportCommandOptions
     {
-        [Option('p', "provider", Required = true, HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
+        [Option("config", HelpText = "Load parameters from configuration file (JSON). Other options will override config file values.")]
+        public string? ConfigFile { get; set; }
+        
+        [Option('p', "provider", HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
         public string Provider { get; set; } = string.Empty;
         
-        [Option('c', "connection", Required = true, HelpText = "Connection string")]
+        [Option('c', "connection", HelpText = "Connection string")]
         public string ConnectionString { get; set; } = string.Empty;
         
-        [Option('i', "input", Required = true, HelpText = "Input directory path")]
+        [Option('i', "input", HelpText = "Input directory path")]
         public string InputPath { get; set; } = string.Empty;
         
         [Option('t', "tables", HelpText = "Comma-separated list of tables to import (default: all tables)")]
@@ -845,10 +1180,13 @@ namespace DatabaseMigrationTool
     [Verb("schema", HelpText = "View and export database schema")]
     public class SchemaCommandOptions
     {
-        [Option('p', "provider", Required = true, HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
+        [Option("config", HelpText = "Load parameters from configuration file (JSON). Other options will override config file values.")]
+        public string? ConfigFile { get; set; }
+        
+        [Option('p', "provider", HelpText = "Database provider (sqlserver, mysql, postgresql, firebird)")]
         public string Provider { get; set; } = string.Empty;
         
-        [Option('c', "connection", Required = true, HelpText = "Connection string")]
+        [Option('c', "connection", HelpText = "Connection string")]
         public string ConnectionString { get; set; } = string.Empty;
         
         [Option('t', "tables", HelpText = "Comma-separated list of tables to view (default: all tables)")]
@@ -862,5 +1200,18 @@ namespace DatabaseMigrationTool
         
         [Option("script-path", HelpText = "Output path for SQL scripts")]
         public string? ScriptPath { get; set; }
+    }
+
+    [Verb("config", HelpText = "Manage configuration files")]
+    public class ConfigCommandOptions
+    {
+        [Option("create-sample", HelpText = "Create a sample configuration file with all options")]
+        public string? CreateSamplePath { get; set; }
+        
+        [Option("validate", HelpText = "Validate a configuration file")]
+        public string? ValidatePath { get; set; }
+        
+        [Option("show", HelpText = "Display the contents of a configuration file")]
+        public string? ShowPath { get; set; }
     }
 }

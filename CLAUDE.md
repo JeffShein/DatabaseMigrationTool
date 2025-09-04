@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Guidelines
 
 - Act as an expert software developer
+- Accept edits should be on by default when working with Claude Code
 - Never hardcode data element names except in debugging
 - Write code generically to solve problems
 - Prefer simpler, less complicated solutions
@@ -15,9 +16,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Requirements
 
-- .NET 9.0 (project targets net9.0-windows)
+- .NET 9.0 SDK (project targets net9.0-windows, specified in global.json)
 - Windows platform (WPF dependency)
 - x86 architecture (configured for win-x86 runtime)
+- Visual C++ runtime (for Firebird DLLs)
+
+### Firebird-Specific Dependencies
+Firebird provider requires additional DLL files deployed with the application:
+- `fbembed.dll`, `fbclient.dll`, `fbintl.dll` (Firebird libraries)
+- `icudt30.dll`, `icuin30.dll`, `icuuc30.dll` (Unicode support)  
+- `msvcp80.dll`, `msvcr80.dll` (Visual C++ runtime)
+- Configuration files: `firebird.conf`, `fbintl.conf`, `firebird.msg`
 
 ## Common Commands
 
@@ -86,8 +95,11 @@ dotnet run -- emergency-import --input ./export_output --provider mysql --connec
 # Direct transfer (bypass batch processing)
 dotnet run -- direct-transfer --source-provider sqlserver --source-connection "Server=source;Database=SourceDB;User Id=sa;Password=P@ssw0rd;TrustServerCertificate=True;" --target-provider mysql --target-connection "Server=target;Database=TargetDB;User=root;Password=password;" --tables "Customers,Orders"
 
-# File inspection
-dotnet run -- dump-file --file ./export_output/metadata.bin
+# File inspection (individual table metadata)
+dotnet run -- dump-file --file ./export_output/table_metadata/dbo_Customers.meta
+
+# File inspection (data files)
+dotnet run -- dump-file --file ./export_output/data/dbo_Orders_batch0.bin
 
 # Diagnostic analysis
 dotnet run -- debug-analyze-file --file ./export_output/table_data_Orders.bin
@@ -97,6 +109,61 @@ dotnet run -- validate-ei --provider sqlserver --connection "Server=localhost;Da
 
 # Diagnose connection and provider issues
 dotnet run -- diagnose --provider firebird --connection "DataSource=localhost;Database=C:\firebird\data\mydb.fdb;User=SYSDBA;Password=masterkey;"
+```
+
+### Configuration File Management
+
+The tool supports comprehensive configuration files in JSON format for saving and reusing parameters across operations:
+
+```bash
+# Create a sample configuration file with all options
+dotnet run -- config --create-sample my_config.json
+
+# Validate a configuration file
+dotnet run -- config --validate my_config.json
+
+# Display configuration file contents
+dotnet run -- config --show my_config.json
+
+# Use configuration file with export (command-line options override config file)
+dotnet run -- export --config my_config.json
+
+# Use configuration with specific overrides
+dotnet run -- export --config my_config.json --provider mysql --output ./different_output
+
+# Use configuration file with import
+dotnet run -- import --config my_config.json
+
+# Use configuration file with schema operations
+dotnet run -- schema --config my_config.json --verbose
+```
+
+**Configuration File Structure:**
+Configuration files are JSON format containing export, import, schema, and global settings. They support:
+- All command-line parameters for export, import, and schema operations
+- Connection strings, provider settings, and paths
+- Batch sizes, table filters, and operation flags
+- Global settings like timeouts and logging preferences
+- Version information for backward compatibility
+
+**Benefits:**
+- **Automation**: Save complex configurations once, reuse in scripts
+- **Team Sharing**: Export configurations for team collaboration
+- **Environment Management**: Different configs for dev/staging/production
+- **Documentation**: Configuration files document migration procedures
+- **Flexibility**: Override specific parameters without editing the file
+
+### Debugging and Diagnostics
+
+```bash
+# Check build warnings (treat as errors per project guidelines)
+dotnet build -v normal
+
+# Clean build artifacts
+dotnet clean
+
+# Run with verbose console output (when debugging)
+dotnet run -- --console --verbose
 ```
 
 ### Testing
@@ -138,19 +205,33 @@ The application follows a provider-based architecture where different database s
    - `RowData`: Contains the actual data values as key-value pairs
    - `DatabaseExport`: The top-level container for exported database data
 
-3. **Core Services**:
+3. **Metadata Management System**:
+   - `MetadataManager`: Central utility for reading/writing granular export metadata with table-specific files
+   - `ExportManifest`: Lightweight JSON overview of exported tables, timestamps, and configuration
+   - `TableManifestEntry`: Individual table entry tracking schema, row count, and file information
+   - `TableMetadata`: Individual table schema stored as compressed MessagePack binary (.meta files)
+   - `DependencyManifest`: Cross-table relationships and foreign key dependencies for import ordering
+   - `ForeignKeyDependency`: Specific foreign key relationship information between tables
+
+4. **Core Services**:
    - `DatabaseExporter`: Handles the export of database schema and data
    - `DatabaseImporter`: Handles the import of database schema and data
    - `PerformanceOptimizer`: Optimizes performance for large datasets
    - `DirectTransferUtility`: Handles direct database-to-database transfers
    - `EmergencyImporter`: Recovery utility for importing from batch files
 
-4. **Command-Line Processing**:
+5. **Command-Line Processing**:
    - Uses `CommandLineParser` package to process command arguments
    - Supports multiple verbs: `providers`, `export`, `import`, `schema`, etc.
    - Each command has its own options class with proper help texts
 
-5. **Serialization & Compression**:
+5. **Export/Import Overwrite Detection**:
+   - `ExportOverwriteChecker`: Provides table-specific overwrite detection and surgical deletion
+   - `ImportOverwriteChecker`: Analyzes existing target database tables for import conflicts
+   - `ExportOverwriteDialog`: User interface for confirming export overwrites with detailed file lists
+   - `ImportOverwriteDialog`: User interface for confirming import operations that affect existing data
+
+6. **Serialization & Compression**:
    - Uses `MessagePack` for efficient binary serialization
    - Applies compression (`GZip` and `BZip2`) to reduce output file sizes
 
@@ -159,19 +240,55 @@ The application follows a provider-based architecture where different database s
 1. **Export Process**:
    - Discover database schema (tables, columns, indexes, etc.)
    - Calculate dependency ordering to handle foreign key relationships
-   - Export metadata to a compressed binary file
+   - Export granular metadata: JSON manifest files and individual table .meta files
    - Export table data to individual compressed files, with optional filtering
+   - Perform table-specific overwrite detection before writing any files
+   - Support incremental exports that preserve existing non-conflicting tables
 
 2. **Import Process**:
-   - Read metadata to understand the database structure
+   - Read granular metadata from JSON manifests and individual table .meta files
+   - Analyze target database for existing tables and data conflicts
    - Create schema in the target database (if enabled)
-   - Import data in the correct dependency order
+   - Import data in the correct dependency order based on foreign key relationships
    - Create foreign keys after data import (if enabled)
 
 3. **Direct Transfer Process**:
    - Connect to both source and target databases simultaneously
    - Calculate dependency ordering
    - Transfer data directly between databases without intermediate files
+
+### Export File Structure
+
+The application uses a granular file structure for exports that enables table-specific operations and incremental exports:
+
+#### Core Metadata Files
+- **`export_manifest.json`**: Lightweight JSON manifest containing export overview, table list, and timestamps
+- **`dependencies.json`**: Foreign key dependencies and import ordering information
+- **`table_metadata/[schema]_[table].meta`**: Individual BZip2-compressed MessagePack files containing detailed table schema
+
+#### Data Files  
+- **`data/[schema]_[table].bin`**: Single compressed data file for tables exported in one batch
+- **`data/[schema]_[table]_batch[N].bin`**: Multiple compressed batch files for large tables
+- **`data/[schema]_[table].info`**: Table-specific export statistics and metadata
+- **`data/[schema]_[table].error`**: Error logs specific to individual table exports
+
+#### Log Files (Auto-Updated)
+- **`export_log.txt`**: General export operation log (overwritten on each export)
+- **`export_skipped_tables.txt`**: List of tables skipped during export (overwritten on each export)
+
+#### Key Benefits of This Structure
+- **Incremental Exports**: Add new tables without affecting existing exports
+- **Selective Overwrites**: Only conflicting tables are removed when overwriting
+- **Granular Recovery**: Individual table failures don't affect the entire export
+- **Parallel Processing**: Table operations can be parallelized more effectively
+- **Merge Capability**: Multiple partial exports can be combined into complete exports
+
+#### Overwrite Detection Logic
+The system performs intelligent overwrite detection:
+- **Table-Specific Analysis**: Only warns when specific tables being exported would conflict
+- **Surgical Deletion**: Removes only conflicting table files, preserves others
+- **Manifest Updates**: Updates manifests and dependencies rather than overwriting
+- **Log File Exclusion**: Doesn't warn about log files which are always overwritten
 
 ### Performance Considerations
 
@@ -378,17 +495,19 @@ The Schema View functionality provides comprehensive database schema analysis:
 
 ### Firebird DLL Deployment
 
-Firebird requires specific DLL files to be deployed with the application:
+**Automatic Deployment**: The project includes an MSBuild target (`CopyFirebirdDllsToRoot`) that automatically copies required Firebird DLLs to the application root directory after build.
+
+**Required Files**:
 - `fbembed.dll`, `fbclient.dll`, `fbintl.dll` (Firebird libraries)
 - `icudt30.dll`, `icuin30.dll`, `icuuc30.dll` (Unicode/internationalization support)
 - `msvcp80.dll`, `msvcr80.dll` (Visual C++ runtime)
 - Configuration files: `firebird.conf`, `fbintl.conf`, `firebird.msg`
 
 **Deployment Structure**:
-- All DLL files are copied to the application root directory for runtime access
-- Configuration files are maintained in the `firebird\` subdirectory
-- The project uses an MSBuild target to automatically copy DLLs from `firebird\` source folder to root output
-- Single source location in `firebird\` directory prevents file duplication in project
+- Source DLLs are stored in `firebird/` directory
+- MSBuild target copies DLLs to application root at build time
+- Configuration files remain in `firebird/` subdirectory
+- Single source location prevents file duplication
 
 ### Connection String Compatibility
 
@@ -428,21 +547,53 @@ The application ensures that the selected provider in the UI matches the provide
 
 ## Recent Enhancements
 
+### Metadata Architecture Overhaul (2025-09)
+- **Granular Metadata System**: Replaced monolithic metadata.bin with per-table .meta files and JSON manifests
+- **Table-Specific Overwrite Detection**: Precise conflict analysis that only warns for actual table conflicts
+- **Surgical Deletion**: Selective file removal that preserves non-conflicting tables during overwrites
+- **Incremental Export Support**: Enable building exports table-by-table without conflicts
+- **Clean Terminology**: Removed legacy "hybrid" references throughout codebase
+
+### Import System Enhancements (2025-09)
+- **Import Table Browser**: Fixed import table selection to show tables from export data, not target database
+- **ImportTableSelectionWindow**: New dedicated window for selecting tables to import from export metadata
+- **Flexible Table Name Matching**: Enhanced importer to handle both "TableName" and "schema.TableName" formats
+- **Import Overwrite Detection**: Fixed to use new MetadataManager instead of legacy metadata.bin
+- **Export Data Validation**: Import directory validation ensures valid export before table browsing
+- **Rich Table Information**: Import browser shows column count, primary keys, and foreign keys from export
+
 ### User Interface Improvements
 - **Table Selection System**: Added comprehensive table browsing with search, multi-select, and caching
+- **Connection Profile Management**: Advanced profile system with encryption, import/export, and cross-tab synchronization
 - **Connection Defaults**: Improved initialization of default values for all database providers  
 - **Authentication Handling**: Fixed SQL Server Windows Authentication defaults and field states
-- **Project Structure**: Cleaned up Firebird DLL deployment to use single source location
+- **Overwrite Dialogs**: Added comprehensive export/import overwrite detection and user confirmation dialogs
+- **Progress Bar Fixes**: Properly clear progress UI when operations are cancelled or fail
 
 ### Performance Optimizations
 - **Intelligent Caching**: Table lists are cached per connection to avoid repeated database queries
 - **Smart Cache Invalidation**: Cache automatically refreshes only when connection details change
 - **Instant Table Loading**: Subsequent table browsing operations load instantly from cache
+- **Configuration Management**: Comprehensive JSON configuration system for automation and team sharing
 
 ### Developer Experience
-- **Cleaner Project File**: Simplified Firebird component deployment using MSBuild targets
+- **Cleaner Project Structure**: Simplified Firebird component deployment using MSBuild targets
+- **Migration Configuration System**: Complete configuration file support with validation and sample generation
 - **Better Documentation**: Enhanced CLAUDE.md with comprehensive UI behavior documentation
 - **Consistent Patterns**: Standardized connection handling across all database providers
+
+### Current Project State (2025-09)
+- **.NET 9.0**: Project updated to latest .NET version with improved performance
+- **Clean Build**: Project compiles with 0 warnings, 0 errors after comprehensive updates
+- **Granular Metadata Architecture**: Complete migration from monolithic metadata.bin to per-table system
+- **Table-Specific Operations**: Precise overwrite detection and surgical deletion capabilities
+- **Enhanced File Structure**: JSON manifests, individual .meta files, and improved organization
+- **Logical Import Flow**: Import table browser now correctly shows export data, not target database tables
+- **Flexible Table Matching**: Handles both simple and schema-qualified table names seamlessly
+- **Configuration Management**: Comprehensive JSON configuration system with validation
+- **Sample Configuration**: Includes `sample_config.json` demonstrating all configuration options
+- **No Legacy Code**: All legacy compatibility code removed for cleaner architecture
+- **No Hardcoded Data**: Application follows generic programming principles with dynamic table discovery
 
 ## Development History
 

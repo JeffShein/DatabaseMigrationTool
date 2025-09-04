@@ -119,44 +119,17 @@ namespace DatabaseMigrationTool.Services
                 tables = await _provider.GetTablesAsync(_connection);
             }
             
-            // Create export metadata
-            var export = new DatabaseExport
-            {
-                DatabaseName = _connection.Database,
-                Schemas = tables ?? new List<TableSchema>(),
-                ExportDate = DateTime.UtcNow.ToString("o"),
-                DependencyOrder = CalculateDependencyOrder(tables ?? new List<TableSchema>())
-            };
-            
-            // Write metadata file
-            string metadataPath = Path.Combine(outputPath, "metadata.bin");
+            // Write metadata
             Directory.CreateDirectory(outputPath);
+            var databaseName = _connection.Database ?? "Unknown";
             
-            try
-            {
-                // Ensure we have at least some data in the export to avoid BZip2 compression errors
-                if (tables == null || tables.Count == 0)
-                {
-                    export.Schemas = new List<TableSchema>(); // Ensure it's initialized
-                }
+            await Utilities.MetadataManager.WriteMetadataAsync(
+                outputPath, 
+                tables ?? new List<TableSchema>(), 
+                databaseName, 
+                _options.IncludeSchemaOnly);
                 
-                using (var fs = File.Create(metadataPath))
-                using (var compressor = new BZip2Stream(fs, SharpCompress.Compressors.CompressionMode.Compress, true))
-                {
-                    MessagePackSerializer.Serialize(compressor, export);
-                }
-            }
-            catch (DivideByZeroException)
-            {
-                // Falling back to uncompressed metadata export
-                
-                // Fallback to uncompressed export if BZip2 fails
-                string uncompressedPath = Path.Combine(outputPath, "metadata.json");
-                using (var fs = File.Create(uncompressedPath))
-                {
-                    await JsonSerializer.SerializeAsync(fs, export);
-                }
-            }
+            ReportProgress(5, 100, "Metadata written");
             
             // Report progress
             ReportProgress(10, 100, $"Exported {tables?.Count ?? 0} table schemas to metadata file");
@@ -1038,25 +1011,12 @@ namespace DatabaseMigrationTool.Services
             string dataDir = Path.Combine(outputPath, "data");
             Directory.CreateDirectory(dataDir);
             
-            // Create metadata file with just this table
-            var export = new DatabaseExport
-            {
-                DatabaseName = "SingleTableExport",
-                ExportDate = DateTime.Now.ToString("o"),
-                Schemas = new List<TableSchema> { tableSchema },
-                DependencyOrder = new Dictionary<string, List<string>>
-                {
-                    { "1", new List<string> { tableSchema.FullName } }
-                }
-            };
-            
-            // Write metadata
-            string metadataPath = Path.Combine(outputPath, "metadata.bin");
-            using (var fs = File.Create(metadataPath))
-            using (var compressor = new BZip2Stream(fs, SharpCompress.Compressors.CompressionMode.Compress, true))
-            {
-                MessagePackSerializer.Serialize(compressor, export);
-            }
+            // Write single table metadata
+            await Utilities.MetadataManager.WriteMetadataAsync(
+                outputPath, 
+                new List<TableSchema> { tableSchema }, 
+                "SingleTableExport", 
+                schemaOnly: false);
             
             // Export the table data
             await ExportTableDataAsync(tableSchema, dataDir, null, null);

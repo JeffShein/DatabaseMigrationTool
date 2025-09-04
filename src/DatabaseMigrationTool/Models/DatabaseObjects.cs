@@ -184,4 +184,85 @@ namespace DatabaseMigrationTool.Models
         [Key(5)]
         public Dictionary<string, string> AdditionalProperties { get; set; } = new();
     }
+
+    /// <summary>
+    /// Export manifest - lightweight JSON file that tracks what's in the export
+    /// </summary>
+    public class ExportManifest
+    {
+        public string DatabaseName { get; set; } = string.Empty;
+        public string ExportDate { get; set; } = string.Empty;
+        public string FormatVersion { get; set; } = "2.0";
+        public List<TableManifestEntry> Tables { get; set; } = new();
+        public bool HasDependencies { get; set; } = true;
+        public Dictionary<string, string> AdditionalProperties { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Individual table entry in the export manifest
+    /// </summary>
+    public class TableManifestEntry
+    {
+        public string TableName { get; set; } = string.Empty;
+        public string Schema { get; set; } = "dbo";
+        public string MetadataFile { get; set; } = string.Empty;
+        public List<string> DataFiles { get; set; } = new();
+        public string ExportDate { get; set; } = string.Empty;
+        public long RowCount { get; set; } = 0;
+        public bool HasData { get; set; } = true;
+        public bool SchemaOnly { get; set; } = false;
+    }
+
+    /// <summary>
+    /// Individual table metadata - stored as MessagePack binary file
+    /// </summary>
+    [MessagePackObject]
+    public class TableMetadata
+    {
+        [Key(0)]
+        public TableSchema Schema { get; set; } = new();
+        
+        [Key(1)]
+        public string ExportDate { get; set; } = string.Empty;
+        
+        [Key(2)]
+        public string FormatVersion { get; set; } = "2.0";
+        
+        [Key(3)]
+        public long RowCount { get; set; } = 0;
+        
+        [Key(4)]
+        public bool SchemaOnly { get; set; } = false;
+        
+        [Key(5)]
+        public string SourceDatabase { get; set; } = string.Empty;
+        
+        [Key(6)]
+        public Dictionary<string, string> AdditionalProperties { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Cross-table dependencies and import order
+    /// </summary>
+    public class DependencyManifest
+    {
+        public string FormatVersion { get; set; } = "2.0";
+        public Dictionary<string, List<string>> DependencyOrder { get; set; } = new();
+        public List<ForeignKeyDependency> CrossTableForeignKeys { get; set; } = new();
+        public string CreatedDate { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Cross-table foreign key dependency information
+    /// </summary>
+    public class ForeignKeyDependency
+    {
+        public string ConstraintName { get; set; } = string.Empty;
+        public string SourceTable { get; set; } = string.Empty;
+        public string TargetTable { get; set; } = string.Empty;
+        public List<string> SourceColumns { get; set; } = new();
+        public List<string> TargetColumns { get; set; } = new();
+        public string OnDelete { get; set; } = string.Empty;
+        public string OnUpdate { get; set; } = string.Empty;
+    }
 }

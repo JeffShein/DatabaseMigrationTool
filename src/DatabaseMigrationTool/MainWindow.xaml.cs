@@ -392,6 +392,65 @@ namespace DatabaseMigrationTool
                             TableCriteria = tableCriteria
                         };
                         
+                        // Check for existing export and get user confirmation
+                        // Use table-specific overwrite detection
+                        var overwriteResult = await Utilities.ExportOverwriteChecker.CheckForTableSpecificOverwriteAsync(outputDirectory, options.Tables);
+                        
+                        if (overwriteResult.HasExistingExport)
+                        {
+                            bool shouldOverwrite = false;
+                            
+                            // Show confirmation dialog on UI thread
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                var overwriteDialog = new ExportOverwriteDialog(overwriteResult);
+                                overwriteDialog.Owner = Window.GetWindow(this);
+                                bool? result = overwriteDialog.ShowDialog();
+                                shouldOverwrite = result == true && overwriteDialog.ShouldOverwrite;
+                            });
+                            
+                            if (!shouldOverwrite)
+                            {
+                                updateStatus("Export cancelled by user.");
+                                Dispatcher.Invoke(() =>
+                                {
+                                    ExportProgressText.Text = "Export cancelled - existing files not overwritten";
+                                });
+                                return; // Exit the export operation
+                            }
+                            
+                            // User confirmed overwrite - delete conflicting files
+                            if (overwriteResult.ConflictingTables.Count > 0)
+                            {
+                                updateStatus($"Deleting files for {overwriteResult.ConflictingTables.Count} conflicting table(s)...");
+                                try
+                                {
+                                    Utilities.ExportOverwriteChecker.DeleteConflictingTables(outputDirectory, overwriteResult.ConflictingTables);
+                                    updateStatus("Conflicting table files deleted successfully.");
+                                }
+                                catch (Exception deleteEx)
+                                {
+                                    updateStatus($"Error deleting conflicting files: {deleteEx.Message}");
+                                    throw new InvalidOperationException($"Failed to delete conflicting table files before starting export: {deleteEx.Message}", deleteEx);
+                                }
+                            }
+                            else
+                            {
+                                // Full export - delete everything
+                                updateStatus("Deleting existing export files...");
+                                try
+                                {
+                                    Utilities.ExportOverwriteChecker.DeleteExistingExport(outputDirectory);
+                                    updateStatus("Existing export files deleted successfully.");
+                                }
+                                catch (Exception deleteEx)
+                                {
+                                    updateStatus($"Error deleting existing files: {deleteEx.Message}");
+                                    throw new InvalidOperationException($"Failed to delete existing export files before starting new export: {deleteEx.Message}", deleteEx);
+                                }
+                            }
+                        }
+                        
                         var exporter = new DatabaseExporter(provider, connection, options);
                         exporter.SetProgressReporter(progressReporter);
                         await exporter.ExportAsync(options.OutputDirectory);
@@ -459,8 +518,16 @@ namespace DatabaseMigrationTool
             }
             finally
             {
-                // Re-enable export button
+                // Re-enable export button and reset progress UI
                 ExportButton.IsEnabled = true;
+                
+                // Hide progress UI if export was cancelled or failed
+                if (ExportProgressText.Text?.Contains("cancelled") == true || ExportProgressText.Text?.Contains("failed") == true)
+                {
+                    ExportProgressGroupBox.Visibility = Visibility.Collapsed;
+                    ExportProgressBar.IsIndeterminate = false;
+                    ExportProgressBar.Value = 0;
+                }
             }
         }
 
@@ -609,10 +676,46 @@ namespace DatabaseMigrationTool
                             ContinueOnError = continueOnError
                         };
                         
-                        var importer = new DatabaseImporter(provider, connection, options);
-                        importer.SetProgressReporter(progressReporter);
                         // Cache the text value on the background thread to avoid cross-thread access
                         string importPath = Dispatcher.Invoke(() => ImportInputDirectoryTextBox.Text);
+                        
+                        // Check for existing data and get user confirmation
+                        updateStatus("Checking for existing data in target database...");
+                        var overwriteResult = await Utilities.ImportOverwriteChecker.CheckForExistingDataAsync(
+                            provider, connection, importPath, options);
+                        
+                        if (overwriteResult.HasConflictingData)
+                        {
+                            bool shouldProceed = false;
+                            
+                            // Show confirmation dialog on UI thread
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                var overwriteDialog = new ImportOverwriteDialog(overwriteResult);
+                                overwriteDialog.Owner = Window.GetWindow(this);
+                                bool? result = overwriteDialog.ShowDialog();
+                                shouldProceed = result == true && overwriteDialog.ShouldProceed;
+                            });
+                            
+                            if (!shouldProceed)
+                            {
+                                updateStatus("Import cancelled by user.");
+                                Dispatcher.Invoke(() =>
+                                {
+                                    ImportProgressText.Text = "Import cancelled - existing data not overwritten";
+                                });
+                                return; // Exit the import operation
+                            }
+                            
+                            updateStatus("User confirmed import - proceeding with data overwrite...");
+                        }
+                        else if (!string.IsNullOrEmpty(overwriteResult.Message))
+                        {
+                            updateStatus($"Import analysis: {overwriteResult.Message}");
+                        }
+                        
+                        var importer = new DatabaseImporter(provider, connection, options);
+                        importer.SetProgressReporter(progressReporter);
                         await importer.ImportAsync(importPath);
                         
                         updateStatus("Import completed successfully!");
@@ -678,8 +781,16 @@ namespace DatabaseMigrationTool
             }
             finally
             {
-                // Re-enable import button
+                // Re-enable import button and reset progress UI
                 ImportButton.IsEnabled = true;
+                
+                // Hide progress UI if import was cancelled or failed
+                if (ImportProgressText.Text?.Contains("cancelled") == true || ImportProgressText.Text?.Contains("failed") == true)
+                {
+                    ImportProgressGroupBox.Visibility = Visibility.Collapsed;
+                    ImportProgressBar.IsIndeterminate = false;
+                    ImportProgressBar.Value = 0;
+                }
             }
         }
 
@@ -872,7 +983,7 @@ namespace DatabaseMigrationTool
 
         private void BrowseImportTables_Click(object sender, RoutedEventArgs e)
         {
-            BrowseTables(ImportConnectionControl, ImportTablesTextBox, "import");
+            BrowseImportTablesFromExportData();
         }
 
         private void ClearImportTables_Click(object sender, RoutedEventArgs e)
@@ -957,6 +1068,110 @@ namespace DatabaseMigrationTool
             catch (Exception ex)
             {
                 MessageBox.Show($"Error browsing tables: {ex.Message}", "Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private async void BrowseImportTablesFromExportData()
+        {
+            try
+            {
+                // Get the import input directory
+                string importPath = ImportInputDirectoryTextBox.Text?.Trim() ?? string.Empty;
+                if (string.IsNullOrEmpty(importPath))
+                {
+                    MessageBox.Show("Please specify the import input directory first.", "Input Directory Required", 
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                if (!Directory.Exists(importPath))
+                {
+                    MessageBox.Show("The specified import directory does not exist.", "Directory Not Found", 
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Check if it's a valid export directory
+                if (!MetadataManager.IsValidExport(importPath))
+                {
+                    MessageBox.Show("The specified directory does not contain a valid export (missing export_manifest.json).", 
+                        "Invalid Export Directory", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Show loading
+                var loadingSpinner = new LoadingSpinner();
+                var loadingWindow = new Window
+                {
+                    Content = loadingSpinner,
+                    Title = "Loading Export Data...",
+                    Width = 300,
+                    Height = 150,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Owner = this,
+                    ResizeMode = ResizeMode.NoResize
+                };
+
+                loadingSpinner.StartSpinning();
+                loadingWindow.Show();
+
+                List<TableSchema> exportTables = new List<TableSchema>();
+
+                try
+                {
+                    // Read the export metadata in background
+                    await Task.Run(async () =>
+                    {
+                        var exportMetadata = await MetadataManager.ReadMetadataAsync(importPath);
+                        if (exportMetadata?.Schemas != null)
+                        {
+                            exportTables = exportMetadata.Schemas.ToList();
+                        }
+                    });
+
+                    loadingWindow.Close();
+
+                    if (!exportTables.Any())
+                    {
+                        MessageBox.Show("No tables found in the export data.", "No Tables", 
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+
+                    // Parse existing selected tables
+                    List<string>? preselectedTables = null;
+                    if (!string.IsNullOrWhiteSpace(ImportTablesTextBox.Text))
+                    {
+                        preselectedTables = ImportTablesTextBox.Text
+                            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                            .ToList();
+                    }
+
+                    // Show table selection window with export tables
+                    var tableSelectionWindow = new ImportTableSelectionWindow(exportTables, preselectedTables)
+                    {
+                        Owner = this,
+                        Title = "Select Tables to Import"
+                    };
+
+                    if (tableSelectionWindow.ShowDialog() == true)
+                    {
+                        // Update the text box with selected tables
+                        ImportTablesTextBox.Text = string.Join(", ", tableSelectionWindow.SelectedTableNames);
+                    }
+                }
+                finally
+                {
+                    if (loadingWindow.IsVisible)
+                    {
+                        loadingWindow.Close();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading export data: {ex.Message}", "Error", 
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -1146,7 +1361,16 @@ namespace DatabaseMigrationTool
             }
             finally
             {
+                // Re-enable export button and reset progress UI
                 ExportButton.IsEnabled = true;
+                
+                // Hide progress UI if export was cancelled or failed
+                if (ExportProgressText.Text?.Contains("cancelled") == true || ExportProgressText.Text?.Contains("failed") == true)
+                {
+                    ExportProgressGroupBox.Visibility = Visibility.Collapsed;
+                    ExportProgressBar.IsIndeterminate = false;
+                    ExportProgressBar.Value = 0;
+                }
             }
         }
         
@@ -1215,7 +1439,225 @@ namespace DatabaseMigrationTool
             }
             finally
             {
+                // Re-enable import button and reset progress UI
                 ImportButton.IsEnabled = true;
+                
+                // Hide progress UI if import was cancelled or failed
+                if (ImportProgressText.Text?.Contains("cancelled") == true || ImportProgressText.Text?.Contains("failed") == true)
+                {
+                    ImportProgressGroupBox.Visibility = Visibility.Collapsed;
+                    ImportProgressBar.IsIndeterminate = false;
+                    ImportProgressBar.Value = 0;
+                }
+            }
+        }
+        
+        private async void SaveConfiguration_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var saveDialog = new Microsoft.Win32.SaveFileDialog
+                {
+                    Title = "Save Configuration File",
+                    DefaultExt = ".json",
+                    Filter = "JSON Configuration Files (*.json)|*.json|All Files (*.*)|*.*",
+                    FileName = Utilities.ConfigurationManager.GetDefaultConfigFileName("migration")
+                };
+                
+                if (saveDialog.ShowDialog() == true)
+                {
+                    // Gather current UI state
+                    var exportConfig = GatherExportConfiguration();
+                    var importConfig = GatherImportConfiguration();
+                    var schemaConfig = GatherSchemaConfiguration();
+                    
+                    // Create configuration with user-friendly name
+                    var config = Utilities.ConfigurationManager.CreateFromGuiState(
+                        $"Migration Configuration - {DateTime.Now:yyyy-MM-dd HH:mm}",
+                        "Configuration saved from Database Migration Tool GUI",
+                        exportConfig,
+                        importConfig,
+                        schemaConfig
+                    );
+                    
+                    await Utilities.ConfigurationManager.SaveConfigurationAsync(config, saveDialog.FileName);
+                    
+                    MessageBox.Show($"Configuration saved successfully to:\n{saveDialog.FileName}", 
+                                  "Configuration Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error saving configuration:\n{ex.Message}", 
+                              "Save Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        
+        private async void LoadConfiguration_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var openDialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Load Configuration File",
+                    DefaultExt = ".json",
+                    Filter = "JSON Configuration Files (*.json)|*.json|All Files (*.*)|*.*",
+                    Multiselect = false
+                };
+                
+                if (openDialog.ShowDialog() == true)
+                {
+                    var config = await Utilities.ConfigurationManager.LoadConfigurationAsync(openDialog.FileName);
+                    
+                    // Apply configuration to UI
+                    ApplyConfigurationToGui(config);
+                    
+                    MessageBox.Show($"Configuration loaded successfully from:\n{openDialog.FileName}\n\nLoaded: {config.Name ?? "Unnamed Configuration"}", 
+                                  "Configuration Loaded", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading configuration:\n{ex.Message}", 
+                              "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        
+        private Models.ExportConfig GatherExportConfiguration()
+        {
+            return new Models.ExportConfig
+            {
+                Provider = GetSelectedProviderName(ExportProviderIndex),
+                ConnectionString = ExportConnectionString,
+                OutputPath = ExportOutputDirectoryTextBox.Text,
+                Tables = ExportTablesTextBox.Text,
+                TableCriteriaFile = ExportTableCriteriaFileTextBox.Text,
+                BatchSize = int.TryParse(ExportBatchSizeTextBox.Text, out int batchSize) ? batchSize : 100000,
+                SchemaOnly = ExportSchemaOnlyCheckBox.IsChecked ?? false
+            };
+        }
+        
+        private Models.ImportConfig GatherImportConfiguration()
+        {
+            return new Models.ImportConfig
+            {
+                Provider = GetSelectedProviderName(ImportProviderIndex),
+                ConnectionString = ImportConnectionString,
+                InputPath = ImportInputDirectoryTextBox.Text,
+                Tables = ImportTablesTextBox.Text,
+                BatchSize = int.TryParse(ImportBatchSizeTextBox.Text, out int batchSize) ? batchSize : 100000,
+                NoCreateSchema = !(ImportCreateSchemaCheckBox.IsChecked ?? true),
+                NoCreateForeignKeys = !(ImportCreateForeignKeysCheckBox.IsChecked ?? true),
+                SchemaOnly = ImportSchemaOnlyCheckBox.IsChecked ?? false,
+                ContinueOnError = ImportContinueOnErrorCheckBox.IsChecked ?? false
+            };
+        }
+        
+        private Models.SchemaConfig GatherSchemaConfiguration()
+        {
+            return new Models.SchemaConfig
+            {
+                Provider = GetSelectedProviderName(SchemaProviderIndex),
+                ConnectionString = SchemaConnectionString,
+                Tables = SchemaTablesTextBox.Text,
+                Verbose = SchemaVerboseCheckBox.IsChecked ?? false,
+                GenerateScripts = SchemaScriptOutputCheckBox.IsChecked ?? false,
+                ScriptPath = SchemaScriptPathTextBox.Text
+            };
+        }
+        
+        private void ApplyConfigurationToGui(Models.MigrationConfiguration config)
+        {
+            // Apply Export configuration
+            if (config.Export != null)
+            {
+                if (!string.IsNullOrEmpty(config.Export.Provider))
+                {
+                    SetProviderByName(config.Export.Provider, "export");
+                }
+                
+                if (!string.IsNullOrEmpty(config.Export.ConnectionString))
+                {
+                    ExportConnectionControl.ConnectionString = config.Export.ConnectionString;
+                }
+                
+                ExportOutputDirectoryTextBox.Text = config.Export.OutputPath ?? "";
+                ExportTablesTextBox.Text = config.Export.Tables ?? "";
+                ExportTableCriteriaFileTextBox.Text = config.Export.TableCriteriaFile ?? "";
+                ExportBatchSizeTextBox.Text = config.Export.BatchSize.ToString();
+                ExportSchemaOnlyCheckBox.IsChecked = config.Export.SchemaOnly;
+            }
+            
+            // Apply Import configuration
+            if (config.Import != null)
+            {
+                if (!string.IsNullOrEmpty(config.Import.Provider))
+                {
+                    SetProviderByName(config.Import.Provider, "import");
+                }
+                
+                if (!string.IsNullOrEmpty(config.Import.ConnectionString))
+                {
+                    ImportConnectionControl.ConnectionString = config.Import.ConnectionString;
+                }
+                
+                ImportInputDirectoryTextBox.Text = config.Import.InputPath ?? "";
+                ImportTablesTextBox.Text = config.Import.Tables ?? "";
+                ImportBatchSizeTextBox.Text = config.Import.BatchSize.ToString();
+                ImportCreateSchemaCheckBox.IsChecked = !config.Import.NoCreateSchema;
+                ImportCreateForeignKeysCheckBox.IsChecked = !config.Import.NoCreateForeignKeys;
+                ImportSchemaOnlyCheckBox.IsChecked = config.Import.SchemaOnly;
+                ImportContinueOnErrorCheckBox.IsChecked = config.Import.ContinueOnError;
+            }
+            
+            // Apply Schema configuration
+            if (config.Schema != null)
+            {
+                if (!string.IsNullOrEmpty(config.Schema.Provider))
+                {
+                    SetProviderByName(config.Schema.Provider, "schema");
+                }
+                
+                if (!string.IsNullOrEmpty(config.Schema.ConnectionString))
+                {
+                    SchemaConnectionControl.ConnectionString = config.Schema.ConnectionString;
+                }
+                
+                SchemaTablesTextBox.Text = config.Schema.Tables ?? "";
+                SchemaVerboseCheckBox.IsChecked = config.Schema.Verbose;
+                SchemaScriptOutputCheckBox.IsChecked = config.Schema.GenerateScripts;
+                SchemaScriptPathTextBox.Text = config.Schema.ScriptPath ?? "";
+            }
+        }
+        
+        private void SetProviderByName(string providerName, string tabType)
+        {
+            var providers = DatabaseProviderFactory.GetSupportedProviders().ToArray();
+            int index = Array.FindIndex<string>(providers, p => p.Equals(providerName, StringComparison.OrdinalIgnoreCase));
+            
+            if (index >= 0)
+            {
+                switch (tabType.ToLowerInvariant())
+                {
+                    case "export":
+                        if (ExportConnectionControl != null)
+                        {
+                            ExportConnectionControl.ProviderIndex = index;
+                        }
+                        break;
+                    case "import":
+                        if (ImportConnectionControl != null)
+                        {
+                            ImportConnectionControl.ProviderIndex = index;
+                        }
+                        break;
+                    case "schema":
+                        if (SchemaConnectionControl != null)
+                        {
+                            SchemaConnectionControl.ProviderIndex = index;
+                        }
+                        break;
+                }
             }
         }
 

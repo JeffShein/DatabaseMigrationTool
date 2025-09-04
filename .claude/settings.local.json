@@ -35,7 +35,8 @@
       "WebFetch(domain:www.ibexpert.com)",
       "Bash(dotnet clean:*)",
       "Bash(dotnet run:*)",
-      "Bash(dotnet publish:*)"
+      "Bash(dotnet publish:*)",
+      "Read(/mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Services/**)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

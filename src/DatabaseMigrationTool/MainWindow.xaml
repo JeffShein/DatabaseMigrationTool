@@ -22,11 +22,21 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
                 <TextBlock Grid.Column="0" Text="Database Migration Tool" FontSize="22" FontWeight="SemiBold" Foreground="White" />
                 
-                <Button Grid.Column="1" Content="📋 Resume Operations" Background="Transparent" Foreground="White" 
+                <Button Grid.Column="1" Content="💾 Save Config" Background="Transparent" Foreground="White" 
+                       BorderBrush="White" BorderThickness="1" Padding="10,5" Margin="0,0,10,0" Click="SaveConfiguration_Click"
+                       ToolTip="Save current settings to configuration file"/>
+                       
+                <Button Grid.Column="2" Content="📂 Load Config" Background="Transparent" Foreground="White" 
+                       BorderBrush="White" BorderThickness="1" Padding="10,5" Margin="0,0,10,0" Click="LoadConfiguration_Click"
+                       ToolTip="Load settings from configuration file"/>
+                
+                <Button Grid.Column="3" Content="📋 Resume Operations" Background="Transparent" Foreground="White" 
                        BorderBrush="White" BorderThickness="1" Padding="10,5" Click="ResumeOperations_Click"
                        ToolTip="Resume interrupted export/import operations"/>
             </Grid>

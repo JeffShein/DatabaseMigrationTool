@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "name": "Sample Migration Configuration",
+  "description": "This is a sample configuration file showing all available options",
+  "createdDate": "2025-09-03T20:45:04.3169487Z",
+  "export": {
+    "provider": "sqlserver",
+    "connectionString": "Server=localhost;Database=SourceDB;User Id=sa;Password=your_password;TrustServerCertificate=True;",
+    "outputPath": "./export_output",
+    "tables": "Customers,Orders,Products",
+    "tableCriteriaFile": null,
+    "tableCriteria": null,
+    "batchSize": 100000,
+    "schemaOnly": false
+  },
+  "import": {
+    "provider": "mysql",
+    "connectionString": "Server=localhost;Database=TargetDB;User=root;Password=your_password;",
+    "inputPath": "./export_output",
+    "tables": null,
+    "batchSize": 100000,
+    "noCreateSchema": false,
+    "noCreateForeignKeys": false,
+    "schemaOnly": false,
+    "continueOnError": false
+  },
+  "schema": {
+    "provider": "postgresql",
+    "connectionString": "Host=localhost;Database=mydb;Username=postgres;Password=your_password;",
+    "tables": null,
+    "verbose": true,
+    "generateScripts": true,
+    "scriptPath": "./schema_scripts"
+  },
+  "global": {
+    "timeoutSeconds": 300,
+    "verboseLogging": false,
+    "autoConfirmOverwrites": false,
+    "skipOverwriteChecks": false
+  }
+}
