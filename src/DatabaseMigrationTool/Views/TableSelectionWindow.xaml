@@ -1,0 +1,81 @@
+<Window x:Class="DatabaseMigrationTool.Views.TableSelectionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Select Tables" Height="500" Width="600"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock Grid.Row="0" Text="Select Tables to Include" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,10"/>
+        
+        <!-- Search/Filter -->
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="Filter:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <TextBox Grid.Column="1" x:Name="FilterTextBox" TextChanged="FilterTextBox_TextChanged" 
+                     ToolTip="Type to filter table names"/>
+        </Grid>
+
+        <!-- Tables List -->
+        <Border Grid.Row="2" BorderBrush="#DDDDDD" BorderThickness="1" Background="White">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                
+                <!-- Select All/None buttons -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="5" Background="#F5F5F5">
+                    <Button Content="Select All" Click="SelectAll_Click" Margin="0,0,5,0" Padding="10,2"/>
+                    <Button Content="Select None" Click="SelectNone_Click" Padding="10,2"/>
+                    <TextBlock x:Name="CountTextBlock" Text="(0 tables)" VerticalAlignment="Center" Margin="10,0,0,0" FontStyle="Italic"/>
+                </StackPanel>
+                
+                <!-- Tables CheckBox List -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="TablesItemsControl">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Content="{Binding DisplayName}" 
+                                         IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                         Tag="{Binding TableName}"
+                                         Margin="5,2"
+                                         Checked="TableCheckBox_Changed" 
+                                         Unchecked="TableCheckBox_Changed"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- Loading indicator -->
+        <TextBlock Grid.Row="2" x:Name="LoadingTextBlock" Text="Loading tables..." 
+                   HorizontalAlignment="Center" VerticalAlignment="Center" 
+                   FontStyle="Italic" Visibility="Collapsed"/>
+
+        <!-- Status -->
+        <TextBlock Grid.Row="3" x:Name="StatusTextBlock" Text="" 
+                   Margin="0,10,0,5" FontStyle="Italic" Foreground="Gray"/>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="OK" Click="OK_Click" Padding="20,5" Margin="0,0,10,0" IsDefault="True"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="20,5" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

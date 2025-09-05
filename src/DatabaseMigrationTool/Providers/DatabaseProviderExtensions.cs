@@ -1,6 +1,7 @@
 using System;
 using System.Data.Common;
 using System.Threading.Tasks;
+using DatabaseMigrationTool.Constants;
 using DatabaseMigrationTool.Models;
 
 namespace DatabaseMigrationTool.Providers
@@ -36,7 +37,7 @@ namespace DatabaseMigrationTool.Providers
                 cmd.CommandText = $"SELECT COUNT(*) FROM \"{tableName}\"";
                 
                 // Add a timeout to prevent long-running queries
-                cmd.CommandTimeout = 3; // 3 seconds timeout
+                cmd.CommandTimeout = DatabaseConstants.QuickCommandTimeout;
                 
                 var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
                 return result != null ? System.Convert.ToInt32(result) : 0;

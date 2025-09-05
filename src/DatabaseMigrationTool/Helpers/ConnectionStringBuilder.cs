@@ -208,6 +208,9 @@ namespace DatabaseMigrationTool.Helpers
             username = "";
             password = "";
             
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return false;
+            
             try
             {
                 var parts = SplitConnectionString(connectionString);
@@ -275,6 +278,9 @@ namespace DatabaseMigrationTool.Helpers
             username = "";
             password = "";
             useSsl = false;
+            
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return false;
             
             try
             {
@@ -347,6 +353,9 @@ namespace DatabaseMigrationTool.Helpers
             username = "";
             password = "";
             useSsl = true;
+            
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return false;
             
             try
             {

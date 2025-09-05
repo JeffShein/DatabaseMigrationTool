@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
 namespace DatabaseMigrationTool.Models
@@ -53,26 +54,35 @@ namespace DatabaseMigrationTool.Models
         /// <summary>
         /// Database provider (sqlserver, mysql, postgresql, firebird)
         /// </summary>
+        [Required(ErrorMessage = "Database provider is required")]
+        [RegularExpression(@"^(sqlserver|mysql|postgresql|firebird)$", ErrorMessage = "Provider must be one of: sqlserver, mysql, postgresql, firebird")]
         public string Provider { get; set; } = string.Empty;
         
         /// <summary>
         /// Connection string for source database
         /// </summary>
+        [Required(ErrorMessage = "Connection string is required")]
+        [MinLength(10, ErrorMessage = "Connection string must be at least 10 characters")]
         public string ConnectionString { get; set; } = string.Empty;
         
         /// <summary>
         /// Output directory path for export files
         /// </summary>
+        [Required(ErrorMessage = "Output path is required")]
+        [MinLength(3, ErrorMessage = "Output path must be at least 3 characters")]
         public string OutputPath { get; set; } = string.Empty;
         
         /// <summary>
         /// Comma-separated list of tables to export (empty = all tables)
         /// </summary>
+        [RegularExpression(@"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?(\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?)*$|^$", 
+            ErrorMessage = "Tables must be valid table names separated by commas")]
         public string? Tables { get; set; }
         
         /// <summary>
         /// Path to JSON file containing table criteria filters
         /// </summary>
+        [RegularExpression(@"^.*\.json$", ErrorMessage = "Table criteria file must be a .json file")]
         public string? TableCriteriaFile { get; set; }
         
         /// <summary>
@@ -83,6 +93,7 @@ namespace DatabaseMigrationTool.Models
         /// <summary>
         /// Number of rows to process in a single batch
         /// </summary>
+        [Range(1, 1000000, ErrorMessage = "Batch size must be between 1 and 1,000,000")]
         public int BatchSize { get; set; } = 100000;
         
         /// <summary>

@@ -1,0 +1,206 @@
+<Window x:Class="DatabaseMigrationTool.Views.FirebirdDatabaseExplorerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:DatabaseMigrationTool.Views"
+        mc:Ignorable="d"
+        Title="Firebird Database Explorer"
+        Height="700" Width="900" WindowStartupLocation="CenterOwner">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Title -->
+            <TextBlock x:Name="HeaderTextBlock" Grid.Column="0" Text="Firebird Database Explorer" 
+                       FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            
+            <!-- File Path -->
+            <Grid Grid.Column="1" Margin="10,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="File: " VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="FilePathTextBox" Margin="5,0" IsReadOnly="True"/>
+            </Grid>
+            
+            <!-- Open Button -->
+            <Button Grid.Column="2" Content="Open File..." Padding="10,5" Click="OpenFileButton_Click"/>
+        </Grid>
+
+        <!-- Main Content -->
+        <TabControl Grid.Row="1" Margin="10,0,10,10">
+            <!-- Header Analysis Tab -->
+            <TabItem Header="Header Analysis">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <Button Grid.Row="0" Content="Analyze Header" HorizontalAlignment="Left" Margin="0,5" Padding="10,5" Click="AnalyzeHeaderButton_Click"/>
+                    
+                    <TextBox Grid.Row="1" x:Name="HeaderAnalysisTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" 
+                         AcceptsReturn="True" />
+                </Grid>
+            </TabItem>
+            
+            <!-- Metadata Tab -->
+            <TabItem Header="Metadata">
+                <TextBox x:Name="MetadataTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" 
+                         AcceptsReturn="True" />
+            </TabItem>
+            
+            <!-- Tables Tab -->
+            <TabItem Header="Tables">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="250"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Table controls -->
+                    <Grid Grid.Row="0" Grid.ColumnSpan="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <Button Grid.Column="0" Content="Scan for Tables" HorizontalAlignment="Left" Margin="0,5" Padding="10,5" Click="ScanTablesButton_Click"/>
+                        
+                        <TextBox Grid.Column="1" x:Name="TableFilterTextBox" Margin="10,5" 
+                                 VerticalContentAlignment="Center" 
+                                 ToolTip="Filter tables by name"
+                                 TextChanged="TableFilterTextBox_TextChanged"/>
+                        
+                        <Button Grid.Column="2" Content="Export Metadata" HorizontalAlignment="Right" Margin="0,5" Padding="10,5" Click="ExportMetadataButton_Click"/>
+                    </Grid>
+                    
+                    <!-- Table list -->
+                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="TablesListBox" 
+                             Margin="0,5,5,0" 
+                             SelectionChanged="TablesListBox_SelectionChanged"
+                             MouseDoubleClick="TablesListBox_MouseDoubleClick"/>
+                    
+                    <!-- Table details -->
+                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="DataStructuresTextBox" 
+                             IsReadOnly="True" 
+                             Margin="5,5,0,0"
+                             VerticalScrollBarVisibility="Auto" 
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" 
+                             AcceptsReturn="True" />
+                </Grid>
+            </TabItem>
+            
+            <!-- Data Structures Tab -->
+            <TabItem Header="Data Structures">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <Button Grid.Row="0" Content="Scan Data Structures" HorizontalAlignment="Left" Margin="0,5" Padding="10,5" Click="ScanDataStructuresButton_Click"/>
+                    
+                    <TextBox Grid.Row="1" x:Name="DataStructuresScanTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" 
+                         AcceptsReturn="True" />
+                </Grid>
+            </TabItem>
+            
+            <!-- Raw Dump Tab -->
+            <TabItem Header="Raw Dump">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <TextBlock Grid.Column="0" Text="Offset:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <TextBox Grid.Column="1" x:Name="OffsetTextBox" Text="0" VerticalContentAlignment="Center"/>
+                        
+                        <TextBlock Grid.Column="2" Text="Length:" VerticalAlignment="Center" Margin="10,0,5,0"/>
+                        <TextBox Grid.Column="3" x:Name="LengthTextBox" Text="1024" VerticalContentAlignment="Center"/>
+                        
+                        <Button Grid.Column="4" Content="View" Margin="10,5" Padding="10,5" Click="ViewDumpButton_Click"/>
+                    </Grid>
+                    
+                    <TextBox Grid.Row="1" x:Name="RawDumpTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" 
+                         AcceptsReturn="True" />
+                </Grid>
+            </TabItem>
+            
+            <!-- Log Tab -->
+            <TabItem Header="Log">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <Button Grid.Row="0" Content="Export Log" HorizontalAlignment="Right" Margin="0,5" Padding="10,5" Click="ExportLogButton_Click"/>
+                    
+                    <TextBox Grid.Row="1" x:Name="LogTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" 
+                         AcceptsReturn="True" />
+                </Grid>
+            </TabItem>
+        </TabControl>
+        
+        <!-- Status Bar -->
+        <StatusBar Grid.Row="2">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusTextBlock" Text="Ready" />
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

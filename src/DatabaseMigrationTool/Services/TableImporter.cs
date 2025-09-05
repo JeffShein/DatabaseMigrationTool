@@ -43,9 +43,9 @@ namespace DatabaseMigrationTool.Services
         /// Import data for a table from either a single file or multiple batch files
         /// </summary>
         /// <param name="fileProgressHandler">Optional callback to report the current file being processed</param>
-        public async Task<ImportResult> ImportTableDataAsync(TableSchema tableSchema, string dataDir, Action<string>? fileProgressHandler = null)
+        public async Task<TableImportResult> ImportTableDataAsync(TableSchema tableSchema, string dataDir, Action<string>? fileProgressHandler = null)
         {
-            var result = new ImportResult();
+            var result = new TableImportResult();
             
             try
             {
@@ -271,9 +271,9 @@ namespace DatabaseMigrationTool.Services
         /// <summary>
         /// Imports data from a single file
         /// </summary>
-        private async Task<ImportResult> ImportDataFileAsync(TableSchema tableSchema, string filePath)
+        private async Task<TableImportResult> ImportDataFileAsync(TableSchema tableSchema, string filePath)
         {
-            var result = new ImportResult();
+            var result = new TableImportResult();
             
             try
             {
@@ -668,7 +668,7 @@ namespace DatabaseMigrationTool.Services
     /// <summary>
     /// Result of an import operation
     /// </summary>
-    public class ImportResult
+    public class TableImportResult
     {
         public bool Success { get; set; }
         public int RowsImported { get; set; }

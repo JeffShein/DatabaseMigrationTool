@@ -3,6 +3,9 @@ using DatabaseMigrationTool.Commands;
 using DatabaseMigrationTool.Providers;
 using DatabaseMigrationTool.Services;
 using DatabaseMigrationTool.Utilities;
+using DatabaseMigrationTool.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Data.Common;
 using System.IO;
 using System.IO.Compression;
@@ -16,10 +19,21 @@ namespace DatabaseMigrationTool
 {
     public class Program
     {
+        private static IServiceProvider? _serviceProvider;
+        
         // Entry point that will handle both GUI and console modes
         [STAThread] // Required for WPF
         public static void Main(string[] args)
         {
+            // Initialize dependency injection
+            _serviceProvider = ConfigureServices();
+            
+            // Initialize error handling system
+            ErrorHandler.Initialize();
+            ErrorHandler.RegisterUnhandledExceptionHandlers();
+            
+            try
+            {
             // Raw file dumper for examining binary files
             if (args.Length >= 2 && args[0] == "dump-file")
             {
@@ -417,12 +431,40 @@ namespace DatabaseMigrationTool
                 // Command line arguments provided - process them as before
                 ProcessCommandLineArgs(args).Wait();
             }
+            }
+            finally
+            {
+                // Cleanup dependency injection
+                if (_serviceProvider is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+        }
+        
+        private static IServiceProvider ConfigureServices()
+        {
+            var services = new ServiceCollection();
+            
+            // Add core services
+            services.AddDatabaseMigrationServices();
+            services.AddErrorHandling();
+            
+            var serviceProvider = services.BuildServiceProvider();
+            
+            // Configure logging based on environment
+            #if DEBUG
+                LoggingService.ConfigureDevelopmentLogging();
+            #endif
+            
+            return serviceProvider;
         }
         
         private static void RunGuiMode()
         {
             try
             {
+                // Run WPF application on the main STA thread
                 var application = new Application();
                 var mainWindow = new MainWindow();
                 application.Run(mainWindow);

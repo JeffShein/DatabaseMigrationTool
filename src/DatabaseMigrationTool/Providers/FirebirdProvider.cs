@@ -1,3 +1,4 @@
+using DatabaseMigrationTool.Constants;
 using DatabaseMigrationTool.Models;
 using System;
 using System.Collections.Generic;
@@ -21,12 +22,9 @@ namespace DatabaseMigrationTool.Providers
     /// <summary>
     /// Provider for Firebird databases
     /// </summary>
-    public class FirebirdProvider : IDatabaseProvider
+    public class FirebirdProvider : BaseDatabaseProvider
     {
-        public string ProviderName => "Firebird";
-        
-        // Logging delegate
-        private Action<string>? _logger;
+        public override string ProviderName => "Firebird";
         
         // Path to the database file
         private string? _databaseFilePath = null;
@@ -74,103 +72,24 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public DbConnection CreateConnection(string connectionString)
+        public override DbConnection CreateConnection(string connectionString)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-            {
-                throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
-            }
+            ValidateConnectionString(connectionString);
             
             try
             {
-                // Parse connection string
+                // Parse and validate connection parameters
                 var parsedConnectionString = ParseConnectionString(connectionString);
+                ValidateConnectionParameters(parsedConnectionString);
                 
-                // Get file path from connection string
-                string? filePath = null;
-                if (parsedConnectionString.TryGetValue("Database", out var dbPath) || 
-                    parsedConnectionString.TryGetValue("File", out dbPath))
-                {
-                    filePath = dbPath;
-                }
-                
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    throw new ArgumentException("No database file path specified in connection string. Connection string must include 'Database' parameter.", nameof(connectionString));
-                }
-                
-                // Validate required user parameter
-                if (!parsedConnectionString.ContainsKey("User") || string.IsNullOrWhiteSpace(parsedConnectionString["User"]))
-                {
-                    throw new ArgumentException("User parameter is required in Firebird connection string.", nameof(connectionString));
-                }
-                
-                // Validate password parameter exists (even if empty)
-                if (!parsedConnectionString.ContainsKey("Password"))
-                {
-                    throw new ArgumentException("Password parameter is required in Firebird connection string.", nameof(connectionString));
-                }
-
-                // Save the database file path
-                _databaseFilePath = filePath;
-                
-                // Check if it's a local file or server database
-                _isLocalFile = true;
-                bool fileExists = File.Exists(filePath);
-                
-                // If not found as absolute path, try relative path
-                if (!fileExists && (filePath.Contains("..") || filePath.Contains(".\\")))
-                {
-                    string currentDir = Directory.GetCurrentDirectory();
-                    string resolvedPath = Path.GetFullPath(Path.Combine(currentDir, filePath));
-                    
-                    Log($"Trying to resolve relative path: {filePath} to {resolvedPath}");
-                    
-                    if (File.Exists(resolvedPath))
-                    {
-                        filePath = resolvedPath;
-                        _databaseFilePath = resolvedPath;
-                        fileExists = true;
-                        Log($"Successfully resolved path to: {resolvedPath}");
-                    }
-                }
-                
-                // If file still doesn't exist, assume it's a server database
-                if (!fileExists)
-                {
-                    _isLocalFile = false;
-                    Log($"Path not found locally, assuming it's a server database or alias: {filePath}");
-                }
+                // Extract and resolve database file path
+                string filePath = ExtractDatabaseFilePath(parsedConnectionString);
+                string resolvedFilePath = ResolveFilePath(filePath);
                 
                 Log("Using ServerType=1 (Embedded) with fbembed.dll");
                 
-                // Create a Firebird connection with appropriate settings
-                string fbConnectionString = BuildFirebirdConnectionString(filePath, parsedConnectionString);
-                Log($"Connection string: {MaskPassword(fbConnectionString)}");
-                
-                // Create a connection approach with embedded mode
-                Log("Creating Firebird connection with ServerType=1 (Embedded)");
-                Log($"File exists: {(_isLocalFile ? "Yes, local file" : "No, server database")}");
-                Log($"Connection string: {MaskPassword(fbConnectionString)}");
-                Log("Using embedded mode with fbembed.dll that was working before");
-                
-                try
-                {
-                    // Create connection with the built connection string
-                    var connection = new FbConnection(fbConnectionString);
-                    
-                    // Try to open the connection to test if it works
-                    connection.Open();
-                    connection.Close();
-                    
-                    Log($"Successfully connected to Firebird database: {filePath}");
-                    return connection;
-                }
-                catch (FbException ex)
-                {
-                    Log($"Connection attempt failed: {ex.Message}");
-                    throw; // Re-throw the exception
-                }
+                // Create and test connection
+                return CreateAndTestConnection(resolvedFilePath, parsedConnectionString);
             }
             catch (Exception ex)
             {
@@ -184,6 +103,125 @@ namespace DatabaseMigrationTool.Providers
                 
                 // For other exceptions, wrap with more context
                 throw new InvalidOperationException($"Failed to connect to Firebird database: {ex.Message}", ex);
+            }
+        }
+        
+        /// <summary>
+        /// Validates connection parameters for Firebird requirements
+        /// </summary>
+        private void ValidateConnectionParameters(Dictionary<string, string> parsedConnectionString)
+        {
+            // Validate required user parameter
+            if (!parsedConnectionString.ContainsKey("User") || string.IsNullOrWhiteSpace(parsedConnectionString["User"]))
+            {
+                throw new ArgumentException("User parameter is required in Firebird connection string.", nameof(parsedConnectionString));
+            }
+            
+            // Validate password parameter exists (even if empty)
+            if (!parsedConnectionString.ContainsKey("Password"))
+            {
+                throw new ArgumentException("Password parameter is required in Firebird connection string.", nameof(parsedConnectionString));
+            }
+        }
+        
+        /// <summary>
+        /// Extracts database file path from connection parameters
+        /// </summary>
+        private string ExtractDatabaseFilePath(Dictionary<string, string> parsedConnectionString)
+        {
+            string? filePath = null;
+            if (parsedConnectionString.TryGetValue("Database", out var dbPath) || 
+                parsedConnectionString.TryGetValue("File", out dbPath))
+            {
+                filePath = dbPath;
+            }
+            
+            if (string.IsNullOrEmpty(filePath))
+            {
+                throw new ArgumentException("No database file path specified in connection string. Connection string must include 'Database' parameter.", nameof(parsedConnectionString));
+            }
+            
+            return filePath;
+        }
+        
+        /// <summary>
+        /// Resolves and validates the database file path
+        /// </summary>
+        private string ResolveFilePath(string filePath)
+        {
+            // Save the database file path
+            _databaseFilePath = filePath;
+            
+            // Check if it's a local file or server database
+            _isLocalFile = true;
+            bool fileExists = File.Exists(filePath);
+            
+            // If not found as absolute path, try relative path
+            if (!fileExists && (filePath.Contains("..") || filePath.Contains(".\\")))
+            {
+                string currentDir = Directory.GetCurrentDirectory();
+                string resolvedPath = Path.GetFullPath(Path.Combine(currentDir, filePath));
+                
+                Log($"Trying to resolve relative path: {filePath} to {resolvedPath}");
+                
+                if (File.Exists(resolvedPath))
+                {
+                    filePath = resolvedPath;
+                    _databaseFilePath = resolvedPath;
+                    fileExists = true;
+                    Log($"Successfully resolved path to: {resolvedPath}");
+                }
+            }
+            
+            // If file still doesn't exist, assume it's a server database
+            if (!fileExists)
+            {
+                _isLocalFile = false;
+                Log($"Path not found locally, assuming it's a server database or alias: {filePath}");
+            }
+            
+            return filePath;
+        }
+        
+        /// <summary>
+        /// Creates and tests a Firebird connection
+        /// </summary>
+        private FbConnection CreateAndTestConnection(string filePath, Dictionary<string, string> parsedConnectionString)
+        {
+            // Create a Firebird connection with appropriate settings
+            string fbConnectionString = BuildFirebirdConnectionString(filePath, parsedConnectionString);
+            Log($"Connection string: {MaskPassword(fbConnectionString)}");
+            
+            // Create a connection approach with embedded mode
+            Log("Creating Firebird connection with ServerType=1 (Embedded)");
+            Log($"File exists: {(_isLocalFile ? "Yes, local file" : "No, server database")}");
+            Log($"Connection string: {MaskPassword(fbConnectionString)}");
+            Log("Using embedded mode with fbembed.dll that was working before");
+            
+            FbConnection? connection = null;
+            try
+            {
+                // Create connection with the built connection string
+                connection = new FbConnection(fbConnectionString);
+                
+                // Try to open the connection to test if it works
+                connection.Open();
+                connection.Close();
+                
+                Log($"Successfully connected to Firebird database: {filePath}");
+                var successfulConnection = connection;
+                connection = null; // Prevent disposal in finally block
+                return successfulConnection;
+            }
+            catch (FbException ex)
+            {
+                Log($"Connection attempt failed: {ex.Message}");
+                throw; // Re-throw the exception
+            }
+            finally
+            {
+                // Dispose connection if an exception occurred before successful return
+                connection?.Dispose();
             }
         }
         
@@ -277,7 +315,7 @@ namespace DatabaseMigrationTool.Providers
         
         // SYSDBA fallback code removed as it's not needed
 
-        public void SetLogger(Action<string> logger)
+        public override void SetLogger(Action<string> logger)
         {
             _logger = logger;
         }
@@ -301,7 +339,7 @@ namespace DatabaseMigrationTool.Providers
             return false; // Using ServerType=1 instead of version
         }
         
-        private void Log(string message)
+        protected override void Log(string message)
         {
             // Write to log file in the application directory
             try
@@ -437,7 +475,7 @@ namespace DatabaseMigrationTool.Providers
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
-        public async Task<List<Models.TableSchema>> GetTablesAsync(DbConnection connection, IEnumerable<string>? tableNames = null)
+        public override async Task<List<Models.TableSchema>> GetTablesAsync(DbConnection connection, IEnumerable<string>? tableNames = null)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -530,7 +568,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public async Task<Models.TableSchema> GetTableSchemaAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<Models.TableSchema> GetTableSchemaAsync(DbConnection connection, string tableName, string? schema = null)
         {
             // Get all tables and filter by name
             var tables = await GetTablesAsync(connection, new[] { tableName });
@@ -544,7 +582,7 @@ namespace DatabaseMigrationTool.Providers
             return table;
         }
         
-        public async Task<List<Models.ColumnDefinition>> GetColumnsAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<Models.ColumnDefinition>> GetColumnsAsync(DbConnection connection, string tableName, string? schema = null)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -657,7 +695,7 @@ namespace DatabaseMigrationTool.Providers
             return columns;
         }
 
-        public async Task<List<Models.IndexDefinition>> GetIndexesAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<Models.IndexDefinition>> GetIndexesAsync(DbConnection connection, string tableName, string? schema = null)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -736,7 +774,7 @@ namespace DatabaseMigrationTool.Providers
             return indexes;
         }
         
-        public async Task<List<Models.ForeignKeyDefinition>> GetForeignKeysAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<Models.ForeignKeyDefinition>> GetForeignKeysAsync(DbConnection connection, string tableName, string? schema = null)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -836,7 +874,7 @@ namespace DatabaseMigrationTool.Providers
             };
         }
         
-        public async Task<List<Models.ConstraintDefinition>> GetConstraintsAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<Models.ConstraintDefinition>> GetConstraintsAsync(DbConnection connection, string tableName, string? schema = null)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -968,7 +1006,7 @@ namespace DatabaseMigrationTool.Providers
             };
         }
         
-        public async Task<IAsyncEnumerable<Models.RowData>> GetTableDataAsync(DbConnection connection, string tableName, string? schema = null, string? whereClause = null, int batchSize = 1000)
+        public override async Task<IAsyncEnumerable<Models.RowData>> GetTableDataAsync(DbConnection connection, string tableName, string? schema = null, string? whereClause = null, int batchSize = 1000)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1051,7 +1089,7 @@ namespace DatabaseMigrationTool.Providers
                     LogDiagnostic($"Transaction ID: {transaction.GetHashCode()}");
                     
                     command.Transaction = transaction;
-                    command.CommandTimeout = 300; // 5 minutes timeout
+                    command.CommandTimeout = DatabaseConstants.LongOperationTimeout;
                     
                     // Log command properties
                     LogDiagnostic($"Command Text: {command.CommandText}");
@@ -1135,7 +1173,7 @@ namespace DatabaseMigrationTool.Providers
                         // Use the standard transaction API with ReadCommitted isolation level
                         var transaction = fbConnection.BeginTransaction(System.Data.IsolationLevel.ReadCommitted);
                         command.Transaction = transaction;
-                        command.CommandTimeout = 300; // 5 minutes timeout
+                        command.CommandTimeout = DatabaseConstants.LongOperationTimeout;
                         
                         var reader = await command.ExecuteReaderAsync();
                         return GetFirebirdRowsEnumerable(reader, columns, fbConnection);
@@ -1214,7 +1252,7 @@ namespace DatabaseMigrationTool.Providers
                                 // Use the standard transaction API with ReadCommitted isolation level
                                 var transaction = fbConnection.BeginTransaction(System.Data.IsolationLevel.ReadCommitted);
                                 command.Transaction = transaction;
-                                command.CommandTimeout = 300;
+                                command.CommandTimeout = DatabaseConstants.LongOperationTimeout;
                                 
                                 var reader = await command.ExecuteReaderAsync();
                                 return GetFirebirdRowsEnumerable(reader, columns, fbConnection);
@@ -1236,7 +1274,7 @@ namespace DatabaseMigrationTool.Providers
                                     // For the final attempt, try ReadUncommitted as it might be more permissive
                                     var transaction = fbConnection.BeginTransaction(System.Data.IsolationLevel.ReadUncommitted);
                                     command.Transaction = transaction;
-                                    command.CommandTimeout = 300;
+                                    command.CommandTimeout = DatabaseConstants.LongOperationTimeout;
                                     
                                     var reader = await command.ExecuteReaderAsync();
                                     return GetFirebirdRowsEnumerable(reader, columns, fbConnection);
@@ -1382,7 +1420,7 @@ namespace DatabaseMigrationTool.Providers
             #pragma warning restore CS1998
         }
         
-        public Task CreateTableAsync(DbConnection connection, Models.TableSchema tableSchema)
+        public override Task CreateTableAsync(DbConnection connection, Models.TableSchema tableSchema)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1415,7 +1453,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public Task CreateIndexesAsync(DbConnection connection, Models.TableSchema tableSchema)
+        public override Task CreateIndexesAsync(DbConnection connection, Models.TableSchema tableSchema)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1457,7 +1495,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public Task CreateConstraintsAsync(DbConnection connection, Models.TableSchema tableSchema)
+        public override Task CreateConstraintsAsync(DbConnection connection, Models.TableSchema tableSchema)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1507,7 +1545,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public Task CreateForeignKeysAsync(DbConnection connection, Models.TableSchema tableSchema)
+        public override Task CreateForeignKeysAsync(DbConnection connection, Models.TableSchema tableSchema)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1559,7 +1597,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public async Task ImportDataAsync(DbConnection connection, string tableName, string? schema, IAsyncEnumerable<Models.RowData> data, int batchSize = 1000)
+        public override async Task ImportDataAsync(DbConnection connection, string tableName, string? schema, IAsyncEnumerable<Models.RowData> data, int batchSize = 1000)
         {
             if (!(connection is FbConnection fbConnection))
             {
@@ -1652,7 +1690,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public string GenerateTableCreationScript(Models.TableSchema tableSchema)
+        public override string GenerateTableCreationScript(Models.TableSchema tableSchema)
         {
             var sb = new StringBuilder();
             
@@ -1713,7 +1751,7 @@ namespace DatabaseMigrationTool.Providers
             return sb.ToString();
         }
         
-        public string GenerateInsertScript(Models.TableSchema tableSchema, Models.RowData row)
+        public override string GenerateInsertScript(Models.TableSchema tableSchema, Models.RowData row)
         {
             var columns = new List<string>();
             var values = new List<string>();
@@ -1776,7 +1814,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
         
-        public string EscapeIdentifier(string identifier)
+        public override string EscapeIdentifier(string identifier)
         {
             return $"\"{identifier}\"";
         }

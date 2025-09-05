@@ -87,7 +87,7 @@ namespace DatabaseMigrationTool.Services
                 {
                     // For Firebird, we get all tables first and then filter in memory to avoid SQL issues
                     Log("Using memory filtering for Firebird tables");
-                    List<TableSchema> allTables = await _provider.GetTablesAsync(_connection);
+                    List<TableSchema> allTables = await _provider.GetTablesAsync(_connection).ConfigureAwait(false);
                     
                     // Convert table names to uppercase for Firebird case-insensitive comparison
                     HashSet<string> requestedTablesUpper = new HashSet<string>(
@@ -101,7 +101,7 @@ namespace DatabaseMigrationTool.Services
                 else
                 {
                     // For other providers, use the provider's filtering
-                    tables = await _provider.GetTablesAsync(_connection, _options.Tables);
+                    tables = await _provider.GetTablesAsync(_connection, _options.Tables).ConfigureAwait(false);
                 }
                 
                 // Validate that all requested tables were found
@@ -116,7 +116,7 @@ namespace DatabaseMigrationTool.Services
             }
             else
             {
-                tables = await _provider.GetTablesAsync(_connection);
+                tables = await _provider.GetTablesAsync(_connection).ConfigureAwait(false);
             }
             
             // Write metadata
@@ -127,7 +127,7 @@ namespace DatabaseMigrationTool.Services
                 outputPath, 
                 tables ?? new List<TableSchema>(), 
                 databaseName, 
-                _options.IncludeSchemaOnly);
+                _options.IncludeSchemaOnly).ConfigureAwait(false);
                 
             ReportProgress(5, 100, "Metadata written");
             

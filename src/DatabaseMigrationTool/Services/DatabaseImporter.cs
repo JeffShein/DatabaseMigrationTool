@@ -137,7 +137,7 @@ namespace DatabaseMigrationTool.Services
                 }
 
                 Log("Reading metadata...");
-                export = await Utilities.MetadataManager.ReadMetadataAsync(inputPath);
+                export = await Utilities.MetadataManager.ReadMetadataAsync(inputPath).ConfigureAwait(false);
                 Log($"Successfully read metadata: {export.Schemas?.Count ?? 0} tables");
                 
                 Log($"Export database name: {export.DatabaseName}");
@@ -243,7 +243,7 @@ namespace DatabaseMigrationTool.Services
                     };
                     
                     // Pass the file progress handler to ImportTableDataAsync
-                    await ImportTableDataAsync(table, dataDir, fileProgressHandler);
+                    await ImportTableDataAsync(table, dataDir, fileProgressHandler).ConfigureAwait(false);
                     
                     // Report progress after each table
                     int completedProgressValue = 40 + (int)((double)(tableCount + 1) / totalTables * 55);
@@ -309,14 +309,14 @@ namespace DatabaseMigrationTool.Services
                             
                             string sql = $"IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{table.Schema}') EXEC('CREATE SCHEMA [{table.Schema}]');";
                             Log($"Executing SQL: {sql}");
-                            await _connection.ExecuteNonQueryAsync(sql);
+                            await _connection.ExecuteNonQueryAsync(sql).ConfigureAwait(false);
                         }
                         else
                         {
                             // Generic syntax for other database systems
                             string sql = $"CREATE SCHEMA IF NOT EXISTS {_provider.EscapeIdentifier(table.Schema)}";
                             Log($"Executing SQL: {sql}");
-                            await _connection.ExecuteNonQueryAsync(sql);
+                            await _connection.ExecuteNonQueryAsync(sql).ConfigureAwait(false);
                         }
                         createdSchemas.Add(table.Schema);
                         Log($"Schema '{table.Schema}' created or already exists");
@@ -350,7 +350,7 @@ namespace DatabaseMigrationTool.Services
                     
                     try
                     {
-                        await _provider.CreateTableAsync(_connection, table);
+                        await _provider.CreateTableAsync(_connection, table).ConfigureAwait(false);
                         Log($"Table {table.FullName} structure created successfully");
                     }
                     catch (Exception ex)
@@ -363,7 +363,7 @@ namespace DatabaseMigrationTool.Services
                     if (table.Indexes?.Any() == true)
                     {
                         Log($"Creating {table.Indexes?.Count ?? 0} indexes for {table.FullName}");
-                        await _provider.CreateIndexesAsync(_connection, table);
+                        await _provider.CreateIndexesAsync(_connection, table).ConfigureAwait(false);
                         Log($"Indexes for {table.FullName} created successfully");
                     }
                     
@@ -371,7 +371,7 @@ namespace DatabaseMigrationTool.Services
                     if (table.Constraints?.Any() == true)
                     {
                         Log($"Creating {table.Constraints?.Count ?? 0} constraints for {table.FullName}");
-                        await _provider.CreateConstraintsAsync(_connection, table);
+                        await _provider.CreateConstraintsAsync(_connection, table).ConfigureAwait(false);
                         Log($"Constraints for {table.FullName} created successfully");
                     }
                     
@@ -405,7 +405,7 @@ namespace DatabaseMigrationTool.Services
                         Log($"Creating foreign keys for {table.FullName}...");
                         try
                         {
-                            await _provider.CreateForeignKeysAsync(_connection, table);
+                            await _provider.CreateForeignKeysAsync(_connection, table).ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -480,7 +480,7 @@ namespace DatabaseMigrationTool.Services
                 
                 // Import the table data
                 Log($"[{table.FullName}] Calling ImportTableDataAsync");
-                var result = await importer.ImportTableDataAsync(table, dataDir);
+                var result = await importer.ImportTableDataAsync(table, dataDir).ConfigureAwait(false);
                 
                 if (result.Success)
                 {                    
@@ -600,7 +600,7 @@ namespace DatabaseMigrationTool.Services
                 }
                 
                 // Read file bytes
-                byte[] fileBytes = await File.ReadAllBytesAsync(filePath);
+                byte[] fileBytes = await File.ReadAllBytesAsync(filePath).ConfigureAwait(false);
                 
                 // Check if it's GZip compressed
                 bool isGZip = fileBytes.Length > 2 && fileBytes[0] == 0x1F && fileBytes[1] == 0x8B;

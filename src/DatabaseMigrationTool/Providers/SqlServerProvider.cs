@@ -11,19 +11,13 @@ using System.Text;
 
 namespace DatabaseMigrationTool.Providers
 {
-    public class SqlServerProvider : IDatabaseProvider
+    public class SqlServerProvider : BaseDatabaseProvider
     {
-        public string ProviderName => "SqlServer";
-        
-        // Logging delegate to redirect all output to the log file
-        private Action<string>? _logger;
+        public override string ProviderName => "SqlServer";
 
-        public DbConnection CreateConnection(string connectionString)
+        public override DbConnection CreateConnection(string connectionString)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-            {
-                throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
-            }
+            ValidateConnectionString(connectionString);
             
             try
             {
@@ -86,30 +80,12 @@ namespace DatabaseMigrationTool.Providers
             return string.Join(";", cleanParts);
         }
         
-        public void SetLogger(Action<string> logger)
-        {
-            _logger = logger;
-        }
-        
-        private void Log(string message)
-        {
-            if (_logger != null)
-            {
-                _logger(message);
-            }
-            else
-            {
-                Console.WriteLine(message);
-            }
-        }
-
-        public async Task<List<TableSchema>> GetTablesAsync(DbConnection connection, IEnumerable<string>? tableNames = null)
+        public override async Task<List<TableSchema>> GetTablesAsync(DbConnection connection, IEnumerable<string>? tableNames = null)
         {
             string tableFilter = "";
             if (tableNames != null && tableNames.Any())
             {
-                var quotedNames = tableNames.Select(t => $"'{t.Replace("'", "''")}'");
-                tableFilter = $" AND t.name IN ({string.Join(",", quotedNames)})";
+                tableFilter = BuildTableFilter(tableNames, "name", "t");
             }
 
             var sql = $@"
@@ -138,7 +114,7 @@ namespace DatabaseMigrationTool.Providers
             return result;
         }
 
-        public async Task<TableSchema> GetTableSchemaAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<TableSchema> GetTableSchemaAsync(DbConnection connection, string tableName, string? schema = null)
         {
             schema ??= "dbo";
 
@@ -170,7 +146,7 @@ namespace DatabaseMigrationTool.Providers
             return table;
         }
 
-        public async Task<List<ColumnDefinition>> GetColumnsAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<ColumnDefinition>> GetColumnsAsync(DbConnection connection, string tableName, string? schema = null)
         {
             schema ??= "dbo";
 
@@ -218,7 +194,7 @@ namespace DatabaseMigrationTool.Providers
             return columns.ToList();
         }
 
-        public async Task<List<IndexDefinition>> GetIndexesAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<IndexDefinition>> GetIndexesAsync(DbConnection connection, string tableName, string? schema = null)
         {
             schema ??= "dbo";
 
@@ -271,7 +247,7 @@ namespace DatabaseMigrationTool.Providers
             return result;
         }
 
-        public async Task<List<ForeignKeyDefinition>> GetForeignKeysAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<ForeignKeyDefinition>> GetForeignKeysAsync(DbConnection connection, string tableName, string? schema = null)
         {
             schema ??= "dbo";
 
@@ -338,7 +314,7 @@ namespace DatabaseMigrationTool.Providers
             return result;
         }
 
-        public async Task<List<ConstraintDefinition>> GetConstraintsAsync(DbConnection connection, string tableName, string? schema = null)
+        public override async Task<List<ConstraintDefinition>> GetConstraintsAsync(DbConnection connection, string tableName, string? schema = null)
         {
             schema ??= "dbo";
 
@@ -395,7 +371,7 @@ namespace DatabaseMigrationTool.Providers
             return result;
         }
 
-        public async Task<IAsyncEnumerable<RowData>> GetTableDataAsync(DbConnection connection, string tableName, string? schema = null, string? whereClause = null, int batchSize = 1000)
+        public override async Task<IAsyncEnumerable<RowData>> GetTableDataAsync(DbConnection connection, string tableName, string? schema = null, string? whereClause = null, int batchSize = 1000)
         {
             schema ??= "dbo";
             var fullTableName = $"[{schema}].[{tableName}]";
@@ -441,7 +417,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public async Task CreateTableAsync(DbConnection connection, TableSchema tableSchema)
+        public override async Task CreateTableAsync(DbConnection connection, TableSchema tableSchema)
         {
             try
             {
@@ -615,7 +591,7 @@ namespace DatabaseMigrationTool.Providers
         
         // This method has been removed as we're no longer doing special handling of default values
 
-        public async Task CreateIndexesAsync(DbConnection connection, TableSchema tableSchema)
+        public override async Task CreateIndexesAsync(DbConnection connection, TableSchema tableSchema)
         {
             try
             {
@@ -676,7 +652,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public async Task CreateConstraintsAsync(DbConnection connection, TableSchema tableSchema)
+        public override async Task CreateConstraintsAsync(DbConnection connection, TableSchema tableSchema)
         {
             try
             {
@@ -756,7 +732,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public async Task CreateForeignKeysAsync(DbConnection connection, TableSchema tableSchema)
+        public override async Task CreateForeignKeysAsync(DbConnection connection, TableSchema tableSchema)
         {
             try
             {
@@ -847,7 +823,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public async Task ImportDataAsync(DbConnection connection, string tableName, string? schema, IAsyncEnumerable<RowData> data, int batchSize = 1000)
+        public override async Task ImportDataAsync(DbConnection connection, string tableName, string? schema, IAsyncEnumerable<RowData> data, int batchSize = 1000)
         {
             schema ??= "dbo";
             var fullTableName = $"[{schema}].[{tableName}]";
@@ -1011,7 +987,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public string GenerateTableCreationScript(TableSchema tableSchema)
+        public override string GenerateTableCreationScript(TableSchema tableSchema)
         {
             var sb = new StringBuilder();
             var fullTableName = $"[{tableSchema.Schema}].[{tableSchema.Name}]";
@@ -1142,7 +1118,7 @@ namespace DatabaseMigrationTool.Providers
         
         // This method has been removed as we're no longer doing special handling of default values
 
-        public string GenerateInsertScript(TableSchema tableSchema, RowData row)
+        public override string GenerateInsertScript(TableSchema tableSchema, RowData row)
         {
             try
             {
@@ -1234,7 +1210,7 @@ namespace DatabaseMigrationTool.Providers
             }
         }
 
-        public string EscapeIdentifier(string identifier)
+        public override string EscapeIdentifier(string identifier)
         {
             return $"[{identifier}]";
         }

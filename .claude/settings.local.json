@@ -1,44 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dotnet build)",
-      "Bash(dotnet restore)",
-      "WebFetch(domain:github.com)",
-      "Bash(find:*)",
-      "Bash(grep:*)",
-      "Bash(command:*)",
-      "Bash(cp:*)",
-      "Bash(rm:*)",
-      "Bash(dotnet build:*)",
-      "WebFetch(domain:www.nuget.org)",
-      "Bash(cat:*)",
-      "Bash(mv:*)",
-      "Bash(sed:*)",
-      "Bash(dotnet add package:*)",
-      "WebFetch(domain:www.firebirdsql.org)",
-      "Bash(mkdir:*)",
-      "WebFetch(domain:ibexpert.net)",
-      "WebFetch(domain:stackoverflow.com)",
-      "WebFetch(domain:en.wikipedia.org)",
-      "WebFetch(domain:docwiki.embarcadero.com)",
-      "WebFetch(domain:www.embarcadero.com)",
-      "WebFetch(domain:firebirdsql.org)",
-      "WebFetch(domain:www.connectionstrings.com)",
-      "WebFetch(domain:docs.microsoft.com)",
-      "WebFetch(domain:learn.microsoft.com)",
-      "WebFetch(domain:www.ibexpert.net)",
-      "WebFetch(domain:ib-aid.com)",
-      "Bash(sudo apt-get:*)",
-      "Bash(sudo apt-get install:*)",
-      "WebFetch(domain:firebird.ru)",
-      "Bash(apt list:*)",
-      "WebFetch(domain:www.ibexpert.com)",
-      "Bash(dotnet clean:*)",
-      "Bash(dotnet run:*)",
-      "Bash(dotnet publish:*)",
-      "Read(/mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Services/**)"
+      "Bash(timeout:*)",
+      "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Models/**)",
+      "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Utilities/**)"
     ],
     "deny": [],
+    "ask": [],
     "defaultMode": "acceptEdits"
   }
 }
