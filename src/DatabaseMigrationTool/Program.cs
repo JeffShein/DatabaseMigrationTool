@@ -466,7 +466,9 @@ namespace DatabaseMigrationTool
             {
                 // Run WPF application on the main STA thread
                 var application = new Application();
-                var mainWindow = new MainWindow();
+                
+                // Create MainWindow using dependency injection
+                var mainWindow = _serviceProvider!.GetRequiredService<MainWindow>();
                 application.Run(mainWindow);
             }
             catch (Exception ex)

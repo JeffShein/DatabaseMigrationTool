@@ -47,24 +47,23 @@ namespace DatabaseMigrationTool.Views
         private int ImportProviderIndex => ImportConnectionControl.ProviderIndex;
         private int SchemaProviderIndex => SchemaConnectionControl.ProviderIndex;
 
-        public MainWindow()
+        // Dependency injection constructor
+        public MainWindow(
+            IUserSettingsService settingsService,
+            IConnectionManager connectionManager,
+            ConnectionProfileManager profileManager,
+            OperationRecoveryService recoveryService)
         {
             InitializeComponent();
             
             // Initialize error handling system
             ErrorHandler.Initialize();
             
-            // Initialize shared profile manager
-            _sharedProfileManager = new ConnectionProfileManager();
-            
-            // Initialize recovery service
-            _recoveryService = new OperationRecoveryService();
-            
-            // Initialize settings service
-            _settingsService = new UserSettingsService();
-            
-            // Initialize connection manager
-            _connectionManager = new ConnectionManager(_settingsService);
+            // Assign injected services
+            _settingsService = settingsService;
+            _connectionManager = connectionManager;
+            _sharedProfileManager = profileManager;
+            _recoveryService = recoveryService;
             
             // Initialize provider ComboBoxes
             var providers = DatabaseProviderFactory.GetSupportedProviders();
@@ -77,6 +76,15 @@ namespace DatabaseMigrationTool.Views
             
             // Load user settings and apply them
             _ = LoadAndApplyUserSettingsAsync();
+        }
+
+        // Parameterless constructor for design-time support (XAML designer)
+        public MainWindow() : this(
+            new UserSettingsService(),
+            new ConnectionManager(new UserSettingsService()),
+            new ConnectionProfileManager(),
+            new OperationRecoveryService())
+        {
         }
 
         private void SetupCacheInvalidation()
@@ -306,540 +314,665 @@ namespace DatabaseMigrationTool.Views
 
         private async void StartExport(object sender, RoutedEventArgs e)
         {
-            // Validate inputs before showing progress UI
-            if (string.IsNullOrWhiteSpace(ExportConnectionString))
+            // Validate all inputs first
+            var validationResult = ValidateExportInputs();
+            if (!validationResult.IsValid)
             {
-                MessageBox.Show("Please enter connection information.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(validationResult.ErrorMessage, "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
+
+            // Initialize progress UI
+            InitializeExportProgressUI();
+            
+            try
+            {
+                await ExecuteExportAsync(validationResult.BatchSize);
+            }
+            catch (Exception ex)
+            {
+                await HandleExportErrorAsync(ex);
+            }
+            finally
+            {
+                FinalizeExportUI();
+            }
+        }
+
+        private (bool IsValid, string ErrorMessage, int BatchSize) ValidateExportInputs()
+        {
+            if (string.IsNullOrWhiteSpace(ExportConnectionString))
+                return (false, "Please enter connection information.", 0);
             
             if (string.IsNullOrWhiteSpace(ExportOutputDirectoryTextBox.Text))
-            {
-                MessageBox.Show("Please select an output directory.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+                return (false, "Please select an output directory.", 0);
             
             // Validate table names if specified
             if (!string.IsNullOrWhiteSpace(ExportTablesTextBox.Text))
             {
                 string[] tableNames = ExportTablesTextBox.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (tableNames.Length == 0)
-                {
-                    MessageBox.Show("Please enter valid table names or leave the field empty to export all tables.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    return (false, "Please enter valid table names or leave the field empty to export all tables.", 0);
                 
-                // Check for empty table names after trimming
                 if (tableNames.Any(t => string.IsNullOrWhiteSpace(t)))
-                {
-                    MessageBox.Show("One or more table names are empty. Please enter valid table names.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    return (false, "One or more table names are empty. Please enter valid table names.", 0);
             }
             
-            // Show progress UI
+            // Parse batch size
+            if (string.IsNullOrWhiteSpace(ExportBatchSizeTextBox.Text) || 
+                !int.TryParse(ExportBatchSizeTextBox.Text, out int batchSize) || 
+                batchSize <= 0)
+                return (false, "Batch size must be a positive number.", 0);
+
+            return (true, string.Empty, batchSize);
+        }
+
+        private void InitializeExportProgressUI()
+        {
             ExportProgressGroupBox.Visibility = Visibility.Visible;
             ExportButton.IsEnabled = false;
             ExportProgressBar.IsIndeterminate = true;
             ExportProgressText.Text = "Preparing to export...";
+        }
+
+        private async Task ExecuteExportAsync(int batchSize)
+        {
+            // Setup provider and connection
+            var (provider, connection, updateStatus, progressReporter) = SetupExportProviderAndCallbacks();
             
-            try
+            // Run export in background
+            await Task.Run(async () =>
             {
-                // Parse batch size
-                if (string.IsNullOrWhiteSpace(ExportBatchSizeTextBox.Text) || !int.TryParse(ExportBatchSizeTextBox.Text, out int batchSize) || batchSize <= 0)
+                try
                 {
-                    MessageBox.Show("Batch size must be a positive number.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
+                    // Build export options from UI
+                    var options = BuildExportOptionsFromUI(batchSize);
+                    
+                    // Handle existing export files
+                    var shouldContinue = await HandleExistingExportFilesAsync(options, updateStatus);
+                    if (!shouldContinue)
+                        return;
+                    
+                    // Execute the actual export
+                    await PerformExportAsync(provider, connection, options, progressReporter, updateStatus);
+                    
+                    // Handle successful completion
+                    await HandleExportSuccessAsync();
                 }
+                catch (Exception ex)
+                {
+                    HandleExportBackgroundError(ex);
+                    throw;
+                }
+            });
+        }
 
-                // Get provider
-                string providerName = GetSelectedProviderName(ExportProviderIndex);
-                var provider = DatabaseProviderFactory.Create(providerName);
-                
-                // Create connection - with additional logging to diagnose any issues
-                StatusTextBlock.Text = "Creating connection to source database...";
-                
-                // Set logger to capture detailed connection information
-                provider.SetLogger(message => {
-                    Dispatcher.Invoke(() => {
-                        StatusTextBlock.Text = message;
-                    });
+        private (IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter) SetupExportProviderAndCallbacks()
+        {
+            // Get provider
+            string providerName = GetSelectedProviderName(ExportProviderIndex);
+            var provider = DatabaseProviderFactory.Create(providerName);
+            
+            // Create connection - with additional logging to diagnose any issues
+            StatusTextBlock.Text = "Creating connection to source database...";
+            
+            // Set logger to capture detailed connection information
+            provider.SetLogger(message => {
+                Dispatcher.Invoke(() => {
+                    StatusTextBlock.Text = message;
                 });
-                
-                var connection = provider.CreateConnection(ExportConnectionString);
-                StatusTextBlock.Text = "Connection created successfully, preparing to export...";
-                
-                // Create progress handler to update status
-                Action<string> updateStatus = (message) => 
-                {
-                    Dispatcher.Invoke(() => StatusTextBlock.Text = message);
-                };
-
-                // Create progress reporter
-                ProgressReportHandler progressReporter = (progress) =>
-                {
-                    Dispatcher.Invoke(() =>
-                    {
-                        // Update progress bar
-                        ExportProgressBar.IsIndeterminate = progress.IsIndeterminate;
-                        if (!progress.IsIndeterminate)
-                        {
-                            ExportProgressBar.Value = progress.Current;
-                            ExportProgressBar.Maximum = progress.Total;
-                        }
-                        
-                        // Update status text
-                        ExportProgressText.Text = progress.Message;
-                        StatusTextBlock.Text = progress.Message;
-                    });
-                };
-
-                // Run export in background
-                await Task.Run(async () =>
-                {
-                    try
-                    {
-                        // Get table criteria if specified
-                        Dictionary<string, string>? tableCriteria = null;
-                        string criteriaPath = Dispatcher.Invoke(() => ExportTableCriteriaFileTextBox.Text);
-                        if (!string.IsNullOrWhiteSpace(criteriaPath) && File.Exists(criteriaPath))
-                        {
-                            string json = File.ReadAllText(criteriaPath);
-                            tableCriteria = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                        }
-                        
-                        // Create options using Dispatcher.Invoke for UI access
-                        var exportTables = Dispatcher.Invoke(() => ExportTablesTextBox.Text);
-                        var includeSchemaOnly = Dispatcher.Invoke(() => ExportSchemaOnlyCheckBox.IsChecked ?? false);
-                        var outputDirectory = Dispatcher.Invoke(() => ExportOutputDirectoryTextBox.Text);
-                        
-                        var options = new ExportOptions
-                        {
-                            Tables = !string.IsNullOrWhiteSpace(exportTables) ?
-                                new List<string>(exportTables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) : null,
-                            BatchSize = batchSize,
-                            IncludeSchemaOnly = includeSchemaOnly,
-                            OutputDirectory = outputDirectory,
-                            TableCriteria = tableCriteria
-                        };
-                        
-                        // Check for existing export and get user confirmation
-                        // Use table-specific overwrite detection
-                        var overwriteResult = await ExportOverwriteChecker.CheckForTableSpecificOverwriteAsync(outputDirectory, options.Tables).ConfigureAwait(false);
-                        
-                        if (overwriteResult.HasExistingExport)
-                        {
-                            bool shouldOverwrite = false;
-                            
-                            // Show confirmation dialog on UI thread
-                            await Dispatcher.InvokeAsync(() =>
-                            {
-                                var overwriteDialog = new ExportOverwriteDialog(overwriteResult);
-                                overwriteDialog.Owner = GetWindow(this);
-                                bool? result = overwriteDialog.ShowDialog();
-                                shouldOverwrite = result == true && overwriteDialog.ShouldOverwrite;
-                            });
-                            
-                            if (!shouldOverwrite)
-                            {
-                                updateStatus("Export cancelled by user.");
-                                Dispatcher.Invoke(() =>
-                                {
-                                    ExportProgressText.Text = "Export cancelled - existing files not overwritten";
-                                });
-                                return; // Exit the export operation
-                            }
-                            
-                            // User confirmed overwrite - delete conflicting files
-                            if (overwriteResult.ConflictingTables.Count > 0)
-                            {
-                                updateStatus($"Deleting files for {overwriteResult.ConflictingTables.Count} conflicting table(s)...");
-                                try
-                                {
-                                    ExportOverwriteChecker.DeleteConflictingTables(outputDirectory, overwriteResult.ConflictingTables);
-                                    updateStatus("Conflicting table files deleted successfully.");
-                                }
-                                catch (Exception deleteEx)
-                                {
-                                    updateStatus($"Error deleting conflicting files: {deleteEx.Message}");
-                                    throw new InvalidOperationException($"Failed to delete conflicting table files before starting export: {deleteEx.Message}", deleteEx);
-                                }
-                            }
-                            else
-                            {
-                                // Full export - delete everything
-                                updateStatus("Deleting existing export files...");
-                                try
-                                {
-                                    ExportOverwriteChecker.DeleteExistingExport(outputDirectory);
-                                    updateStatus("Existing export files deleted successfully.");
-                                }
-                                catch (Exception deleteEx)
-                                {
-                                    updateStatus($"Error deleting existing files: {deleteEx.Message}");
-                                    throw new InvalidOperationException($"Failed to delete existing export files before starting new export: {deleteEx.Message}", deleteEx);
-                                }
-                            }
-                        }
-                        
-                        var exporter = new DatabaseExporter(provider, connection, options);
-                        exporter.SetProgressReporter(progressReporter);
-                        await exporter.ExportAsync(options.OutputDirectory).ConfigureAwait(false);
-                        
-                        updateStatus("Export completed successfully!");
-                        
-                        // Update progress one last time
-                        Dispatcher.Invoke(() =>
-                        {
-                            ExportProgressBar.IsIndeterminate = false;
-                            ExportProgressBar.Value = 100;
-                            ExportProgressBar.Maximum = 100;
-                            ExportProgressText.Text = "Export completed successfully!";
-                        });
-                        
-                        // Hide progress UI after showing success message for 2 seconds
-                        await Task.Delay(2000).ConfigureAwait(false);
-                        Dispatcher.Invoke(() =>
-                        {
-                            ExportProgressGroupBox.Visibility = Visibility.Collapsed;
-                            ExportProgressBar.IsIndeterminate = false;
-                            ExportProgressBar.Value = 0;
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            var errorInfo = ErrorHandler.HandleError(ex, "Database Export", showUserMessage: false);
-                            
-                            // Show enhanced error message with recovery options
-                            var message = errorInfo.Message;
-                            if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
-                            {
-                                message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
-                            }
-
-                            MessageBox.Show(message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        });
-                        throw;
-                    }
-                });
-            }
-            catch (Exception ex)
+            });
+            
+            var connection = provider.CreateConnection(ExportConnectionString);
+            StatusTextBlock.Text = "Connection created successfully, preparing to export...";
+            
+            // Create progress handler to update status
+            Action<string> updateStatus = (message) => 
             {
-                var errorInfo = ErrorHandler.HandleError(ex, "Export Operation", showUserMessage: false);
-                StatusTextBlock.Text = "Export failed.";
-                
-                // Reset progress UI
+                Dispatcher.Invoke(() => StatusTextBlock.Text = message);
+            };
+
+            // Create progress reporter
+            ProgressReportHandler progressReporter = (progress) =>
+            {
                 Dispatcher.Invoke(() =>
                 {
-                    ExportProgressBar.IsIndeterminate = false;
-                    ExportProgressText.Text = $"Export failed: {errorInfo.Message}";
-                });
-                
-                // Offer recovery options for recoverable errors
-                if (errorInfo.IsRecoverable)
-                {
-                    var result = MessageBox.Show(
-                        $"Export failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
-                        "Export Failed - Recovery Available", 
-                        MessageBoxButton.YesNo, 
-                        MessageBoxImage.Question);
-                    
-                    if (result == MessageBoxResult.Yes)
+                    // Update progress bar
+                    ExportProgressBar.IsIndeterminate = progress.IsIndeterminate;
+                    if (!progress.IsIndeterminate)
                     {
-                        // Retry after a delay
-                        _ = Task.Delay(2000).ContinueWith(_ => 
-                        {
-                            Dispatcher.Invoke(() => StartExport(this, new RoutedEventArgs()));
-                        });
+                        ExportProgressBar.Value = progress.Current;
+                        ExportProgressBar.Maximum = progress.Total;
                     }
+                    
+                    // Update status text
+                    ExportProgressText.Text = progress.Message;
+                    StatusTextBlock.Text = progress.Message;
+                });
+            };
+
+            return (provider, connection, updateStatus, progressReporter);
+        }
+
+        private ExportOptions BuildExportOptionsFromUI(int batchSize)
+        {
+            // Get table criteria if specified
+            Dictionary<string, string>? tableCriteria = null;
+            string criteriaPath = Dispatcher.Invoke(() => ExportTableCriteriaFileTextBox.Text);
+            if (!string.IsNullOrWhiteSpace(criteriaPath) && File.Exists(criteriaPath))
+            {
+                string json = File.ReadAllText(criteriaPath);
+                tableCriteria = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            }
+            
+            // Create options using Dispatcher.Invoke for UI access
+            var exportTables = Dispatcher.Invoke(() => ExportTablesTextBox.Text);
+            var includeSchemaOnly = Dispatcher.Invoke(() => ExportSchemaOnlyCheckBox.IsChecked ?? false);
+            var outputDirectory = Dispatcher.Invoke(() => ExportOutputDirectoryTextBox.Text);
+            
+            return new ExportOptions
+            {
+                Tables = !string.IsNullOrWhiteSpace(exportTables) ?
+                    new List<string>(exportTables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) : null,
+                BatchSize = batchSize,
+                IncludeSchemaOnly = includeSchemaOnly,
+                OutputDirectory = outputDirectory,
+                TableCriteria = tableCriteria
+            };
+        }
+
+        private async Task<bool> HandleExistingExportFilesAsync(ExportOptions options, Action<string> updateStatus)
+        {
+            // Check for existing export and get user confirmation
+            var overwriteResult = await ExportOverwriteChecker.CheckForTableSpecificOverwriteAsync(options.OutputDirectory!, options.Tables).ConfigureAwait(false);
+            
+            if (!overwriteResult.HasExistingExport)
+                return true;
+
+            bool shouldOverwrite = false;
+            
+            // Show confirmation dialog on UI thread
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var overwriteDialog = new ExportOverwriteDialog(overwriteResult);
+                overwriteDialog.Owner = GetWindow(this);
+                bool? result = overwriteDialog.ShowDialog();
+                shouldOverwrite = result == true && overwriteDialog.ShouldOverwrite;
+            });
+            
+            if (!shouldOverwrite)
+            {
+                updateStatus("Export cancelled by user.");
+                Dispatcher.Invoke(() =>
+                {
+                    ExportProgressText.Text = "Export cancelled - existing files not overwritten";
+                });
+                return false;
+            }
+            
+            // User confirmed overwrite - delete conflicting files
+            await DeleteExistingExportFilesAsync(overwriteResult, options.OutputDirectory!, updateStatus);
+            return true;
+        }
+
+        private Task DeleteExistingExportFilesAsync(ExportOverwriteResult overwriteResult, string outputDirectory, Action<string> updateStatus)
+        {
+            if (overwriteResult.ConflictingTables.Count > 0)
+            {
+                updateStatus($"Deleting files for {overwriteResult.ConflictingTables.Count} conflicting table(s)...");
+                try
+                {
+                    ExportOverwriteChecker.DeleteConflictingTables(outputDirectory, overwriteResult.ConflictingTables);
+                    updateStatus("Conflicting table files deleted successfully.");
+                }
+                catch (Exception deleteEx)
+                {
+                    updateStatus($"Error deleting conflicting files: {deleteEx.Message}");
+                    throw new InvalidOperationException($"Failed to delete conflicting table files before starting export: {deleteEx.Message}", deleteEx);
                 }
             }
-            finally
+            else
             {
-                // Re-enable export button and reset progress UI
-                ExportButton.IsEnabled = true;
-                
-                // Hide progress UI if export was cancelled or failed
-                if (ExportProgressText.Text?.Contains("cancelled") == true || ExportProgressText.Text?.Contains("failed") == true)
+                // Full export - delete everything
+                updateStatus("Deleting existing export files...");
+                try
                 {
-                    ExportProgressGroupBox.Visibility = Visibility.Collapsed;
-                    ExportProgressBar.IsIndeterminate = false;
-                    ExportProgressBar.Value = 0;
+                    ExportOverwriteChecker.DeleteExistingExport(outputDirectory);
+                    updateStatus("Existing export files deleted successfully.");
                 }
+                catch (Exception deleteEx)
+                {
+                    updateStatus($"Error deleting existing files: {deleteEx.Message}");
+                    throw new InvalidOperationException($"Failed to delete existing export files before starting new export: {deleteEx.Message}", deleteEx);
+                }
+            }
+            
+            return Task.CompletedTask;
+        }
+
+        private async Task PerformExportAsync(IDatabaseProvider provider, System.Data.Common.DbConnection connection, ExportOptions options, ProgressReportHandler progressReporter, Action<string> updateStatus)
+        {
+            var exporter = new DatabaseExporter(provider, connection, options);
+            exporter.SetProgressReporter(progressReporter);
+            await exporter.ExportAsync(options.OutputDirectory!).ConfigureAwait(false);
+            updateStatus("Export completed successfully!");
+        }
+
+        private async Task HandleExportSuccessAsync()
+        {
+            // Update progress one last time
+            Dispatcher.Invoke(() =>
+            {
+                ExportProgressBar.IsIndeterminate = false;
+                ExportProgressBar.Value = 100;
+                ExportProgressBar.Maximum = 100;
+                ExportProgressText.Text = "Export completed successfully!";
+            });
+            
+            // Hide progress UI after showing success message for 2 seconds
+            await Task.Delay(2000).ConfigureAwait(false);
+            Dispatcher.Invoke(() =>
+            {
+                ExportProgressGroupBox.Visibility = Visibility.Collapsed;
+                ExportProgressBar.IsIndeterminate = false;
+                ExportProgressBar.Value = 0;
+            });
+        }
+
+        private void HandleExportBackgroundError(Exception ex)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var errorInfo = ErrorHandler.HandleError(ex, "Database Export", showUserMessage: false);
+                
+                // Show enhanced error message with recovery options
+                var message = errorInfo.Message;
+                if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
+                {
+                    message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
+                }
+
+                MessageBox.Show(message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            });
+        }
+
+        private Task HandleExportErrorAsync(Exception ex)
+        {
+            var errorInfo = ErrorHandler.HandleError(ex, "Export Operation", showUserMessage: false);
+            StatusTextBlock.Text = "Export failed.";
+            
+            // Reset progress UI
+            Dispatcher.Invoke(() =>
+            {
+                ExportProgressBar.IsIndeterminate = false;
+                ExportProgressText.Text = $"Export failed: {errorInfo.Message}";
+            });
+            
+            // Offer recovery options for recoverable errors
+            if (errorInfo.IsRecoverable)
+            {
+                var result = MessageBox.Show(
+                    $"Export failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
+                    "Export Failed - Recovery Available", 
+                    MessageBoxButton.YesNo, 
+                    MessageBoxImage.Question);
+                
+                if (result == MessageBoxResult.Yes)
+                {
+                    // Retry after a delay
+                    _ = Task.Delay(2000).ContinueWith(_ => 
+                    {
+                        Dispatcher.Invoke(() => StartExport(this, new RoutedEventArgs()));
+                    });
+                }
+            }
+            
+            return Task.CompletedTask;
+        }
+
+        private void FinalizeExportUI()
+        {
+            // Re-enable export button and reset progress UI
+            ExportButton.IsEnabled = true;
+            
+            // Hide progress UI if export was cancelled or failed
+            if (ExportProgressText.Text?.Contains("cancelled") == true || ExportProgressText.Text?.Contains("failed") == true)
+            {
+                ExportProgressGroupBox.Visibility = Visibility.Collapsed;
+                ExportProgressBar.IsIndeterminate = false;
+                ExportProgressBar.Value = 0;
             }
         }
 
         private async void StartImport(object sender, RoutedEventArgs e)
         {
-            // Validate inputs before showing progress UI
-            if (string.IsNullOrWhiteSpace(ImportConnectionString))
+            // Validate all inputs first
+            var validationResult = ValidateImportInputs();
+            if (!validationResult.IsValid)
             {
-                MessageBox.Show("Please enter connection information.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(validationResult.ErrorMessage, "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(ImportInputDirectoryTextBox.Text))
+            // Initialize progress UI
+            InitializeImportProgressUI();
+            
+            try
             {
-                MessageBox.Show("Please select an input directory.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                await ExecuteImportAsync(validationResult.BatchSize);
             }
+            catch (Exception ex)
+            {
+                await HandleImportErrorAsync(ex);
+            }
+            finally
+            {
+                FinalizeImportUI();
+            }
+        }
+
+        private (bool IsValid, string ErrorMessage, int BatchSize) ValidateImportInputs()
+        {
+            if (string.IsNullOrWhiteSpace(ImportConnectionString))
+                return (false, "Please enter connection information.", 0);
+
+            if (string.IsNullOrWhiteSpace(ImportInputDirectoryTextBox.Text))
+                return (false, "Please select an input directory.", 0);
             
             // Validate table names if specified
             if (!string.IsNullOrWhiteSpace(ImportTablesTextBox.Text))
             {
                 string[] tableNames = ImportTablesTextBox.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (tableNames.Length == 0)
-                {
-                    MessageBox.Show("Please enter valid table names or leave the field empty to import all tables.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    return (false, "Please enter valid table names or leave the field empty to import all tables.", 0);
                 
-                // Check for empty table names after trimming
                 if (tableNames.Any(t => string.IsNullOrWhiteSpace(t)))
-                {
-                    MessageBox.Show("One or more table names are empty. Please enter valid table names.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                    return (false, "One or more table names are empty. Please enter valid table names.", 0);
             }
             
-            // Show progress UI
+            // Parse batch size
+            if (string.IsNullOrWhiteSpace(ImportBatchSizeTextBox.Text) || 
+                !int.TryParse(ImportBatchSizeTextBox.Text, out int batchSize) || 
+                batchSize <= 0)
+                return (false, "Batch size must be a positive number.", 0);
+
+            return (true, string.Empty, batchSize);
+        }
+
+        private void InitializeImportProgressUI()
+        {
             ImportProgressGroupBox.Visibility = Visibility.Visible;
             ImportButton.IsEnabled = false;
             ImportProgressBar.IsIndeterminate = true;
             ImportProgressText.Text = "Preparing to import...";
+        }
+
+        private async Task ExecuteImportAsync(int batchSize)
+        {
+            // Setup provider and connection
+            var (provider, connection, updateStatus, progressReporter) = SetupImportProviderAndCallbacks();
             
-            try
+            // Run import in background
+            await Task.Run(async () =>
             {
-                // Parse batch size
-                if (string.IsNullOrWhiteSpace(ImportBatchSizeTextBox.Text) || !int.TryParse(ImportBatchSizeTextBox.Text, out int batchSize) || batchSize <= 0)
+                try
                 {
-                    MessageBox.Show("Batch size must be a positive number.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
+                    // Build import options from UI
+                    var options = BuildImportOptionsFromUI(batchSize);
+                    
+                    // Handle existing import data
+                    var shouldContinue = await HandleExistingImportDataAsync(provider, connection, options, updateStatus);
+                    if (!shouldContinue)
+                        return;
+                    
+                    // Execute the actual import
+                    await PerformImportAsync(provider, connection, options, progressReporter, updateStatus);
+                    
+                    // Handle successful completion
+                    await HandleImportSuccessAsync();
                 }
+                catch (Exception ex)
+                {
+                    HandleImportBackgroundError(ex);
+                    throw;
+                }
+            });
+        }
 
-                // Get provider
-                string providerName = GetSelectedProviderName(ImportProviderIndex);
-                var provider = DatabaseProviderFactory.Create(providerName);
-                
-                // Create connection - with additional logging to diagnose any issues
-                StatusTextBlock.Text = "Creating connection to target database...";
-                
-                // Set logger to capture detailed connection information
-                provider.SetLogger(message => {
-                    Dispatcher.Invoke(() => {
-                        StatusTextBlock.Text = message;
-                    });
+        private (IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter) SetupImportProviderAndCallbacks()
+        {
+            // Get provider
+            string providerName = GetSelectedProviderName(ImportProviderIndex);
+            var provider = DatabaseProviderFactory.Create(providerName);
+            
+            // Create connection - with additional logging to diagnose any issues
+            StatusTextBlock.Text = "Creating connection to target database...";
+            
+            // Set logger to capture detailed connection information
+            provider.SetLogger(message => {
+                Dispatcher.Invoke(() => {
+                    StatusTextBlock.Text = message;
                 });
-                
-                var connection = provider.CreateConnection(ImportConnectionString);
-                StatusTextBlock.Text = "Connection created successfully, preparing to import...";
-                
-                // Create progress handler to update status
-                Action<string> updateStatus = (message) => 
-                {
-                    Dispatcher.Invoke(() => StatusTextBlock.Text = message);
-                };
-
-                // Create progress reporter
-                ProgressReportHandler progressReporter = (progress) =>
-                {
-                    Dispatcher.Invoke(() =>
-                    {
-                        // Check if this is a batch file progress update
-                        if (progress.Message?.Contains("[Batch]") == true)
-                        {
-                            // Extract batch information from the message
-                            string batchInfo = progress.Message.Replace("[Batch] ", "");
-                            
-                            // Update progress bar with batch progress
-                            ImportProgressBar.IsIndeterminate = progress.IsIndeterminate;
-                            if (!progress.IsIndeterminate)
-                            {
-                                ImportProgressBar.Value = progress.Current;
-                                ImportProgressBar.Maximum = progress.Total;
-                            }
-                            
-                            // Update status text with both table and batch information
-                            // Get the current table info from previous status message
-                            string tableInfo = ImportProgressText.Text;
-                            
-                            // Check for any previous batch info and remove it
-                            if (tableInfo.Contains(" - Processing file"))
-                            {
-                                // Remove previous batch info
-                                tableInfo = tableInfo.Substring(0, tableInfo.IndexOf(" - Processing file"));
-                            }
-                            
-                            // Combine table info with new batch info
-                            ImportProgressText.Text = $"{tableInfo} - {batchInfo}";
-                            StatusTextBlock.Text = ImportProgressText.Text;
-                        }
-                        else
-                        {
-                            // Regular progress update for table import
-                            ImportProgressBar.IsIndeterminate = progress.IsIndeterminate;
-                            if (!progress.IsIndeterminate)
-                            {
-                                ImportProgressBar.Value = progress.Current;
-                                ImportProgressBar.Maximum = progress.Total;
-                            }
-                            
-                            // Update status text
-                            ImportProgressText.Text = progress.Message;
-                            StatusTextBlock.Text = progress.Message;
-                        }
-                    });
-                };
-
-                // Run import in background
-                await Task.Run(async () =>
-                {
-                    try
-                    {
-                        // Create options using Dispatcher.Invoke for UI access
-                        var importTables = Dispatcher.Invoke(() => ImportTablesTextBox.Text);
-                        var createSchema = Dispatcher.Invoke(() => ImportCreateSchemaCheckBox.IsChecked ?? true);
-                        var createForeignKeys = Dispatcher.Invoke(() => ImportCreateForeignKeysCheckBox.IsChecked ?? true);
-                        var schemaOnly = Dispatcher.Invoke(() => ImportSchemaOnlyCheckBox.IsChecked ?? false);
-                        var continueOnError = Dispatcher.Invoke(() => ImportContinueOnErrorCheckBox.IsChecked ?? false);
-                        
-                        var options = new ImportOptions
-                        {
-                            Tables = !string.IsNullOrWhiteSpace(importTables) ?
-                                new List<string>(importTables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) : null,
-                            BatchSize = batchSize,
-                            CreateSchema = createSchema,
-                            CreateForeignKeys = createForeignKeys,
-                            SchemaOnly = schemaOnly,
-                            ContinueOnError = continueOnError
-                        };
-                        
-                        // Cache the text value on the background thread to avoid cross-thread access
-                        string importPath = Dispatcher.Invoke(() => ImportInputDirectoryTextBox.Text);
-                        
-                        // Check for existing data and get user confirmation
-                        updateStatus("Checking for existing data in target database...");
-                        var overwriteResult = await ImportOverwriteChecker.CheckForExistingDataAsync(
-                            provider, connection, importPath, options).ConfigureAwait(false);
-                        
-                        if (overwriteResult.HasConflictingData)
-                        {
-                            bool shouldProceed = false;
-                            
-                            // Show confirmation dialog on UI thread
-                            await Dispatcher.InvokeAsync(() =>
-                            {
-                                var overwriteDialog = new ImportOverwriteDialog(overwriteResult);
-                                overwriteDialog.Owner = GetWindow(this);
-                                bool? result = overwriteDialog.ShowDialog();
-                                shouldProceed = result == true && overwriteDialog.ShouldProceed;
-                            });
-                            
-                            if (!shouldProceed)
-                            {
-                                updateStatus("Import cancelled by user.");
-                                Dispatcher.Invoke(() =>
-                                {
-                                    ImportProgressText.Text = "Import cancelled - existing data not overwritten";
-                                });
-                                return; // Exit the import operation
-                            }
-                            
-                            updateStatus("User confirmed import - proceeding with data overwrite...");
-                        }
-                        else if (!string.IsNullOrEmpty(overwriteResult.Message))
-                        {
-                            updateStatus($"Import analysis: {overwriteResult.Message}");
-                        }
-                        
-                        var importer = new DatabaseImporter(provider, connection, options);
-                        importer.SetProgressReporter(progressReporter);
-                        await importer.ImportAsync(importPath).ConfigureAwait(false);
-                        
-                        updateStatus("Import completed successfully!");
-                        
-                        // Update progress one last time
-                        Dispatcher.Invoke(() =>
-                        {
-                            ImportProgressBar.IsIndeterminate = false;
-                            ImportProgressBar.Value = 100;
-                            ImportProgressBar.Maximum = 100;
-                            ImportProgressText.Text = "Import completed successfully!";
-                        });
-                        
-                        // Hide progress UI after showing success message for 2 seconds
-                        await Task.Delay(2000).ConfigureAwait(false);
-                        Dispatcher.Invoke(() =>
-                        {
-                            ImportProgressGroupBox.Visibility = Visibility.Collapsed;
-                            ImportProgressBar.IsIndeterminate = false;
-                            ImportProgressBar.Value = 0;
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            var errorInfo = ErrorHandler.HandleError(ex, "Database Import", showUserMessage: false);
-                            
-                            // Show enhanced error message with recovery options
-                            var message = errorInfo.Message;
-                            if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
-                            {
-                                message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
-                            }
-
-                            MessageBox.Show(message, "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        });
-                        throw;
-                    }
-                });
-            }
-            catch (Exception ex)
+            });
+            
+            var connection = provider.CreateConnection(ImportConnectionString);
+            StatusTextBlock.Text = "Connection created successfully, preparing to import...";
+            
+            // Create progress handler to update status
+            Action<string> updateStatus = (message) => 
             {
-                var errorInfo = ErrorHandler.HandleError(ex, "Import Operation", showUserMessage: false);
-                StatusTextBlock.Text = "Import failed.";
-                
-                // Reset progress UI
+                Dispatcher.Invoke(() => StatusTextBlock.Text = message);
+            };
+
+            // Create progress reporter for import (with batch processing support)
+            ProgressReportHandler progressReporter = (progress) =>
+            {
                 Dispatcher.Invoke(() =>
                 {
-                    ImportProgressBar.IsIndeterminate = false;
-                    ImportProgressText.Text = $"Import failed: {errorInfo.Message}";
+                    // Check if this is a batch file progress update
+                    if (progress.Message?.Contains("[Batch]") == true)
+                    {
+                        // Extract batch information from the message
+                        string batchInfo = progress.Message.Replace("[Batch] ", "");
+                        
+                        // Update progress bar with batch progress
+                        ImportProgressBar.IsIndeterminate = progress.IsIndeterminate;
+                        if (!progress.IsIndeterminate)
+                        {
+                            ImportProgressBar.Value = progress.Current;
+                            ImportProgressBar.Maximum = progress.Total;
+                        }
+                        
+                        // Update status text with both table and batch information
+                        string tableInfo = ImportProgressText.Text;
+                        
+                        // Check for any previous batch info and remove it
+                        if (tableInfo.Contains(" - Processing file"))
+                        {
+                            tableInfo = tableInfo.Substring(0, tableInfo.IndexOf(" - Processing file"));
+                        }
+                        
+                        // Combine table info with new batch info
+                        ImportProgressText.Text = $"{tableInfo} - {batchInfo}";
+                        StatusTextBlock.Text = ImportProgressText.Text;
+                    }
+                    else
+                    {
+                        // Regular progress update for table import
+                        ImportProgressBar.IsIndeterminate = progress.IsIndeterminate;
+                        if (!progress.IsIndeterminate)
+                        {
+                            ImportProgressBar.Value = progress.Current;
+                            ImportProgressBar.Maximum = progress.Total;
+                        }
+                        
+                        // Update status text
+                        ImportProgressText.Text = progress.Message;
+                        StatusTextBlock.Text = progress.Message;
+                    }
+                });
+            };
+
+            return (provider, connection, updateStatus, progressReporter);
+        }
+
+        private ImportOptions BuildImportOptionsFromUI(int batchSize)
+        {
+            // Create options using Dispatcher.Invoke for UI access
+            var importTables = Dispatcher.Invoke(() => ImportTablesTextBox.Text);
+            var createSchema = Dispatcher.Invoke(() => ImportCreateSchemaCheckBox.IsChecked ?? true);
+            var createForeignKeys = Dispatcher.Invoke(() => ImportCreateForeignKeysCheckBox.IsChecked ?? true);
+            var schemaOnly = Dispatcher.Invoke(() => ImportSchemaOnlyCheckBox.IsChecked ?? false);
+            var continueOnError = Dispatcher.Invoke(() => ImportContinueOnErrorCheckBox.IsChecked ?? false);
+            
+            return new ImportOptions
+            {
+                Tables = !string.IsNullOrWhiteSpace(importTables) ?
+                    new List<string>(importTables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) : null,
+                BatchSize = batchSize,
+                CreateSchema = createSchema,
+                CreateForeignKeys = createForeignKeys,
+                SchemaOnly = schemaOnly,
+                ContinueOnError = continueOnError
+            };
+        }
+
+        private async Task<bool> HandleExistingImportDataAsync(IDatabaseProvider provider, System.Data.Common.DbConnection connection, ImportOptions options, Action<string> updateStatus)
+        {
+            // Cache the text value on the background thread to avoid cross-thread access
+            string importPath = Dispatcher.Invoke(() => ImportInputDirectoryTextBox.Text);
+            
+            // Check for existing data and get user confirmation
+            updateStatus("Checking for existing data in target database...");
+            var overwriteResult = await ImportOverwriteChecker.CheckForExistingDataAsync(
+                provider, connection, importPath, options).ConfigureAwait(false);
+            
+            if (overwriteResult.HasConflictingData)
+            {
+                bool shouldProceed = false;
+                
+                // Show confirmation dialog on UI thread
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    var overwriteDialog = new ImportOverwriteDialog(overwriteResult);
+                    overwriteDialog.Owner = GetWindow(this);
+                    bool? result = overwriteDialog.ShowDialog();
+                    shouldProceed = result == true && overwriteDialog.ShouldProceed;
                 });
                 
-                // Offer recovery options for recoverable errors
-                if (errorInfo.IsRecoverable)
+                if (!shouldProceed)
                 {
-                    var result = MessageBox.Show(
-                        $"Import failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
-                        "Import Failed - Recovery Available", 
-                        MessageBoxButton.YesNo, 
-                        MessageBoxImage.Question);
-                    
-                    if (result == MessageBoxResult.Yes)
+                    updateStatus("Import cancelled by user.");
+                    Dispatcher.Invoke(() =>
                     {
-                        // Retry after a delay
-                        _ = Task.Delay(2000).ContinueWith(_ => 
-                        {
-                            Dispatcher.Invoke(() => StartImport(this, new RoutedEventArgs()));
-                        });
-                    }
+                        ImportProgressText.Text = "Import cancelled - existing data not overwritten";
+                    });
+                    return false;
+                }
+                
+                updateStatus("User confirmed import - proceeding with data overwrite...");
+            }
+            else if (!string.IsNullOrEmpty(overwriteResult.Message))
+            {
+                updateStatus($"Import analysis: {overwriteResult.Message}");
+            }
+
+            return true;
+        }
+
+        private async Task PerformImportAsync(IDatabaseProvider provider, System.Data.Common.DbConnection connection, ImportOptions options, ProgressReportHandler progressReporter, Action<string> updateStatus)
+        {
+            string importPath = Dispatcher.Invoke(() => ImportInputDirectoryTextBox.Text);
+            
+            var importer = new DatabaseImporter(provider, connection, options);
+            importer.SetProgressReporter(progressReporter);
+            await importer.ImportAsync(importPath).ConfigureAwait(false);
+            updateStatus("Import completed successfully!");
+        }
+
+        private async Task HandleImportSuccessAsync()
+        {
+            // Update progress one last time
+            Dispatcher.Invoke(() =>
+            {
+                ImportProgressBar.IsIndeterminate = false;
+                ImportProgressBar.Value = 100;
+                ImportProgressBar.Maximum = 100;
+                ImportProgressText.Text = "Import completed successfully!";
+            });
+            
+            // Hide progress UI after showing success message for 2 seconds
+            await Task.Delay(2000).ConfigureAwait(false);
+            Dispatcher.Invoke(() =>
+            {
+                ImportProgressGroupBox.Visibility = Visibility.Collapsed;
+                ImportProgressBar.IsIndeterminate = false;
+                ImportProgressBar.Value = 0;
+            });
+        }
+
+        private void HandleImportBackgroundError(Exception ex)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var errorInfo = ErrorHandler.HandleError(ex, "Database Import", showUserMessage: false);
+                
+                // Show enhanced error message with recovery options
+                var message = errorInfo.Message;
+                if (!string.IsNullOrEmpty(errorInfo.SuggestedAction))
+                {
+                    message += $"\n\nSuggested action: {errorInfo.SuggestedAction}";
+                }
+
+                MessageBox.Show(message, "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            });
+        }
+
+        private Task HandleImportErrorAsync(Exception ex)
+        {
+            var errorInfo = ErrorHandler.HandleError(ex, "Import Operation", showUserMessage: false);
+            StatusTextBlock.Text = "Import failed.";
+            
+            // Reset progress UI
+            Dispatcher.Invoke(() =>
+            {
+                ImportProgressBar.IsIndeterminate = false;
+                ImportProgressText.Text = $"Import failed: {errorInfo.Message}";
+            });
+            
+            // Offer recovery options for recoverable errors
+            if (errorInfo.IsRecoverable)
+            {
+                var result = MessageBox.Show(
+                    $"Import failed but may be recoverable.\n\n{errorInfo.Message}\n\nWould you like to try again?",
+                    "Import Failed - Recovery Available", 
+                    MessageBoxButton.YesNo, 
+                    MessageBoxImage.Question);
+                
+                if (result == MessageBoxResult.Yes)
+                {
+                    // Retry after a delay
+                    _ = Task.Delay(2000).ContinueWith(_ => 
+                    {
+                        Dispatcher.Invoke(() => StartImport(this, new RoutedEventArgs()));
+                    });
                 }
             }
-            finally
+            
+            return Task.CompletedTask;
+        }
+
+        private void FinalizeImportUI()
+        {
+            // Re-enable import button and reset progress UI
+            ImportButton.IsEnabled = true;
+            
+            // Hide progress UI if import was cancelled or failed
+            if (ImportProgressText.Text?.Contains("cancelled") == true || ImportProgressText.Text?.Contains("failed") == true)
             {
-                // Re-enable import button and reset progress UI
-                ImportButton.IsEnabled = true;
-                
-                // Hide progress UI if import was cancelled or failed
-                if (ImportProgressText.Text?.Contains("cancelled") == true || ImportProgressText.Text?.Contains("failed") == true)
-                {
-                    ImportProgressGroupBox.Visibility = Visibility.Collapsed;
-                    ImportProgressBar.IsIndeterminate = false;
-                    ImportProgressBar.Value = 0;
-                }
+                ImportProgressGroupBox.Visibility = Visibility.Collapsed;
+                ImportProgressBar.IsIndeterminate = false;
+                ImportProgressBar.Value = 0;
             }
         }
 

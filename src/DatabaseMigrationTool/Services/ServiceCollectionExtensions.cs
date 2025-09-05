@@ -40,6 +40,9 @@ namespace DatabaseMigrationTool.Services
             services.AddTransient<ConnectionProfileManager>();
             services.AddTransient<OperationRecoveryService>();
             
+            // WPF UI components
+            services.AddTransient<Views.MainWindow>();
+            
             return services;
         }
         

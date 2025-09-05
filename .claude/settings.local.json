@@ -3,7 +3,8 @@
     "allow": [
       "Bash(timeout:*)",
       "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Models/**)",
-      "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Utilities/**)"
+      "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Utilities/**)",
+      "Read(//mnt/c/dev/databasemigrationTool/src/DatabaseMigrationTool/Views/**)"
     ],
     "deny": [],
     "ask": [],
