@@ -54,3 +54,4 @@ _ReSharper*/
 # Local development database files
 *.fdb
 *.gdb
+/dist
