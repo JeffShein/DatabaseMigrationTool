@@ -9,11 +9,13 @@
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <UseAppHost>true</UseAppHost>
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>false</PublishSingleFile>
+    <PublishSingleFile>true</PublishSingleFile>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
     <PlatformTarget>x86</PlatformTarget>
     <PublishReadyToRun>true</PublishReadyToRun>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>portable</DebugType>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>

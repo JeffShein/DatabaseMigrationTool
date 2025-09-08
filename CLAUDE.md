@@ -46,6 +46,37 @@ dotnet build --configuration Release
 dotnet publish -c Release --self-contained true -r win-x86
 ```
 
+### Distribution and Packaging
+
+The project includes comprehensive distribution tools for professional Windows deployment:
+
+```bash
+# Build both ZIP and MSI distributions (PowerShell)
+.\build-distribution.ps1
+
+# Build both distributions (Batch file for convenience)
+.\build-both.bat
+
+# Build only ZIP distribution
+.\build-distribution.ps1 -ZipOnly
+
+# Build only MSI installer
+.\build-distribution.ps1 -MsiOnly
+
+# Build MSI installer (dedicated script)
+cd installer
+.\build-msi.ps1
+
+# Clean build with custom output
+.\build-distribution.ps1 -Clean -OutputPath "./release"
+```
+
+**Distribution Options**:
+- **ZIP Archive**: Portable, self-contained distribution with no installation required
+- **MSI Installer**: Professional Windows installer with Start Menu integration, file associations, and uninstall support
+
+See `DISTRIBUTION.md` for complete packaging and deployment documentation.
+
 ### Running the Application
 
 ```bash
@@ -168,10 +199,10 @@ dotnet run -- --console --verbose
 
 ### Testing
 
-Currently, this project does not have automated tests configured. When adding tests:
+The project now includes a test framework using xUnit with Moq for mocking:
 
 ```bash
-# Run all tests (when test projects exist)
+# Run all tests
 dotnet test
 
 # Run tests with detailed output
@@ -179,6 +210,12 @@ dotnet test -v normal
 
 # Run specific tests by filter
 dotnet test --filter "TestMethodName"
+
+# Run tests in specific test project
+dotnet test tests/DatabaseMigrationTool.Tests/
+
+# Run tests with code coverage
+dotnet test --collect:"XPlat Code Coverage"
 ```
 
 ## Project Architecture
@@ -401,9 +438,10 @@ The solution consists of a single main project:
    - Implement retry patterns with exponential backoff for recoverable operations
 
 7. **Testing**:
-   - Currently no test framework is configured
-   - When adding tests, consider using xUnit with ITestOutputHelper for logging
+   - Test framework configured using xUnit with Moq for mocking and coverlet for code coverage
+   - Tests are located in `tests/DatabaseMigrationTool.Tests/`
    - Use descriptive test names following the pattern `[Class]_Should[ExpectedBehavior]`
+   - Use ITestOutputHelper for logging in test methods
 
 8. **Command Handling**:
    - Each command implements a static `Execute` method
@@ -646,8 +684,7 @@ The application ensures that the selected provider in the UI matches the provide
 - **Enhanced File Structure**: JSON manifests, individual .meta files, and improved organization
 - **Logical Import Flow**: Import table browser now correctly shows export data, not target database tables
 - **Flexible Table Matching**: Handles both simple and schema-qualified table names seamlessly
-- **Configuration Management**: Comprehensive JSON configuration system with validation
-- **Sample Configuration**: Includes `sample_config.json` demonstrating all configuration options
+- **Configuration Management**: Comprehensive JSON configuration system with validation and sample generation
 - **No Legacy Code**: All legacy compatibility code removed for cleaner architecture
 - **No Hardcoded Data**: Application follows generic programming principles with dynamic table discovery
 - **Professional Architecture**: MainWindow refactored from 2,000+ line monolith to focused, maintainable methods with clear separation of concerns

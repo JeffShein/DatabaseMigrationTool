@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  
+  <!-- Product Definition -->
+  <Product Id="*" 
+           Name="Database Migration Tool" 
+           Language="1033" 
+           Version="!(bind.FileVersion.DatabaseMigrationToolExe)" 
+           Manufacturer="Database Migration Solutions"
+           UpgradeCode="F8B8C5D4-8F2A-4E3B-9C1D-2A5E6F7D8C9B">
+    
+    <Package InstallerVersion="500" 
+             Compressed="yes" 
+             InstallScope="perMachine"
+             Description="Enterprise Database Migration and Export/Import Tool"
+             Comments="Professional database migration solution supporting SQL Server, MySQL, PostgreSQL, and Firebird" />
+    
+    <!-- Major Upgrade Configuration -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Database Migration Tool is already installed." 
+                  Schedule="afterInstallInitialize" />
+    
+    <MediaTemplate EmbedCab="yes" />
+    
+    <!-- Properties -->
+    <Property Id="ARPPRODUCTICON" Value="DatabaseMigrationTool.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/your-repo/database-migration-tool" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/your-repo/database-migration-tool" />
+    <Property Id="ARPCONTACT" Value="support@yourcompany.com" />
+    <Property Id="MSIFASTINSTALL" Value="7" />
+    
+    <!-- Launch Condition - Windows Version Check -->
+    <Condition Message="This application requires Windows 7 SP1 or later.">
+      <![CDATA[Installed OR (VersionNT >= 601)]]>
+    </Condition>
+    
+    <!-- Directory Structure -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="Database Migration Tool">
+          <Directory Id="FirebirdFolder" Name="firebird" />
+        </Directory>
+      </Directory>
+      
+      <!-- Start Menu -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Database Migration Tool" />
+      </Directory>
+      
+      <!-- Desktop -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+    
+    <!-- Main Application Component Group -->
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      
+      <!-- Main Executable -->
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="DatabaseMigrationToolExe" 
+              Source="$(var.PublishDir)\DatabaseMigrationTool.exe" 
+              KeyPath="yes" />
+        
+        <!-- Registry entries for uninstall info -->
+        <RegistryValue Root="HKLM" 
+                       Key="Software\DatabaseMigrationTool" 
+                       Name="InstallPath" 
+                       Type="string" 
+                       Value="[INSTALLFOLDER]" />
+        
+        <!-- File Association for .dbmconfig files -->
+        <RegistryValue Root="HKLM" 
+                       Key="Software\Classes\.dbmconfig" 
+                       Value="DatabaseMigrationTool.ConfigFile" 
+                       Type="string" />
+        
+        <RegistryValue Root="HKLM" 
+                       Key="Software\Classes\DatabaseMigrationTool.ConfigFile" 
+                       Value="Database Migration Configuration" 
+                       Type="string" />
+        
+        <RegistryValue Root="HKLM" 
+                       Key="Software\Classes\DatabaseMigrationTool.ConfigFile\shell\open\command" 
+                       Value="&quot;[INSTALLFOLDER]DatabaseMigrationTool.exe&quot; --config &quot;%1&quot;" 
+                       Type="string" />
+      </Component>
+      
+      <!-- .NET Runtime Libraries -->
+      <Component Id="RuntimeLibraries" Guid="*">
+        <File Source="$(var.PublishDir)\Microsoft.Data.SqlClient.dll" />
+        <File Source="$(var.PublishDir)\MySqlConnector.dll" />
+        <File Source="$(var.PublishDir)\Npgsql.dll" />
+        <File Source="$(var.PublishDir)\FirebirdSql.Data.FirebirdClient.dll" />
+        <File Source="$(var.PublishDir)\CommandLineParser.dll" />
+        <File Source="$(var.PublishDir)\Dapper.dll" />
+        <File Source="$(var.PublishDir)\MessagePack.dll" />
+        <File Source="$(var.PublishDir)\SharpCompress.dll" />
+      </Component>
+      
+      <!-- Serilog Logging Libraries -->
+      <Component Id="LoggingLibraries" Guid="*">
+        <File Source="$(var.PublishDir)\Serilog.dll" />
+        <File Source="$(var.PublishDir)\Serilog.Extensions.Logging.dll" />
+        <File Source="$(var.PublishDir)\Serilog.Sinks.Console.dll" />
+        <File Source="$(var.PublishDir)\Serilog.Sinks.File.dll" />
+        <File Source="$(var.PublishDir)\Serilog.Enrichers.Environment.dll" />
+        <File Source="$(var.PublishDir)\Serilog.Enrichers.Thread.dll" />
+      </Component>
+      
+      <!-- Microsoft Extensions -->
+      <Component Id="MicrosoftExtensions" Guid="*">
+        <File Source="$(var.PublishDir)\Microsoft.Extensions.DependencyInjection.dll" />
+        <File Source="$(var.PublishDir)\Microsoft.Extensions.Logging.dll" />
+        <File Source="$(var.PublishDir)\Microsoft.Extensions.Logging.Abstractions.dll" />
+      </Component>
+      
+      <!-- Documentation -->
+      <Component Id="Documentation" Guid="*">
+        <File Source="$(var.SourceDir)\USER_GUIDE.md" />
+        <File Source="$(var.SourceDir)\README.md" KeyPath="yes" />
+      </Component>
+      
+      <!-- Application Icon -->
+      <Component Id="ApplicationIcon" Guid="*">
+        <File Id="DatabaseMigrationTool.ico" 
+              Source="$(var.SourceDir)\src\DatabaseMigrationTool\app.ico" 
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- Firebird Component Group -->
+    <ComponentGroup Id="FirebirdFiles" Directory="FirebirdFolder">
+      <Component Id="FirebirdDlls" Guid="*">
+        <!-- Core Firebird Libraries -->
+        <File Source="$(var.PublishDir)\firebird\fbembed.dll" />
+        <File Source="$(var.PublishDir)\firebird\fbclient.dll" />
+        <File Source="$(var.PublishDir)\firebird\fbintl.dll" />
+        
+        <!-- ICU Unicode Support -->
+        <File Source="$(var.PublishDir)\firebird\icudt30.dll" />
+        <File Source="$(var.PublishDir)\firebird\icuin30.dll" />
+        <File Source="$(var.PublishDir)\firebird\icuuc30.dll" />
+        
+        <!-- Visual C++ Runtime -->
+        <File Source="$(var.PublishDir)\firebird\msvcp80.dll" />
+        <File Source="$(var.PublishDir)\firebird\msvcr80.dll" />
+      </Component>
+      
+      <Component Id="FirebirdConfig" Guid="*">
+        <File Source="$(var.PublishDir)\firebird\firebird.conf" KeyPath="yes" />
+        <File Source="$(var.PublishDir)\firebird\fbintl.conf" />
+        <File Source="$(var.PublishDir)\firebird\firebird.msg" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- Shortcuts Component Group -->
+    <ComponentGroup Id="Shortcuts">
+      <!-- Start Menu Shortcut -->
+      <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="*">
+        <Shortcut Id="StartMenuDatabaseMigrationTool"
+                  Name="Database Migration Tool"
+                  Description="Professional Database Migration and Export/Import Tool"
+                  Target="[INSTALLFOLDER]DatabaseMigrationTool.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="DatabaseMigrationTool.ico" />
+        
+        <!-- Console Mode Shortcut -->
+        <Shortcut Id="StartMenuConsoleMode"
+                  Name="Database Migration Tool (Console)"
+                  Description="Run Database Migration Tool in Console Mode"
+                  Target="[INSTALLFOLDER]DatabaseMigrationTool.exe"
+                  Arguments="--console"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="DatabaseMigrationTool.ico" />
+        
+        <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" 
+                       Key="Software\DatabaseMigrationTool\Shortcuts" 
+                       Name="StartMenu" 
+                       Type="integer" 
+                       Value="1" 
+                       KeyPath="yes" />
+      </Component>
+      
+      <!-- Desktop Shortcut (Optional) -->
+      <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="*">
+        <Condition>DESKTOP_SHORTCUT</Condition>
+        <Shortcut Id="DesktopDatabaseMigrationTool"
+                  Name="Database Migration Tool"
+                  Description="Professional Database Migration and Export/Import Tool"
+                  Target="[INSTALLFOLDER]DatabaseMigrationTool.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="DatabaseMigrationTool.ico" />
+        <RegistryValue Root="HKCU" 
+                       Key="Software\DatabaseMigrationTool\Shortcuts" 
+                       Name="Desktop" 
+                       Type="integer" 
+                       Value="1" 
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- Features -->
+    <Feature Id="MainApplication" 
+             Title="Database Migration Tool" 
+             Level="1" 
+             Display="expand"
+             Description="Core application and required libraries"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+    
+    <Feature Id="FirebirdSupport" 
+             Title="Firebird Database Support" 
+             Level="1"
+             Description="Firebird database engine libraries and configuration files">
+      <ComponentGroupRef Id="FirebirdFiles" />
+    </Feature>
+    
+    <!-- UI Configuration -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="DESKTOP_SHORTCUT" Value="0" />
+    
+    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    
+    <!-- Custom UI for Desktop Shortcut -->
+    <UI>
+      <Dialog Id="CustomizeDlg" Width="370" Height="270" Title="Customize Setup">
+        <Control Id="DesktopShortcutCheckBox" Type="CheckBox" X="20" Y="60" Width="290" Height="17" 
+                 Property="DESKTOP_SHORTCUT" CheckBoxValue="1" Text="Create desktop shortcut" />
+        
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+        </Control>
+        
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+      
+      <InstallUISequence>
+        <Show Dialog="CustomizeDlg" After="LicenseAgreementDlg">NOT Installed</Show>
+      </InstallUISequence>
+    </UI>
+    
+    <!-- License -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\License.rtf" />
+    
+    <!-- Banner and Dialog Images -->
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.SourceDir)\installer\Banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.SourceDir)\installer\Dialog.bmp" />
+    
+    <!-- Icon -->
+    <Icon Id="DatabaseMigrationTool.ico" SourceFile="$(var.SourceDir)\src\DatabaseMigrationTool\app.ico" />
+    
+  </Product>
+</Wix>
