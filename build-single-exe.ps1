@@ -56,6 +56,24 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Copy Firebird DLLs for single-file deployment
+Write-Host "Copying Firebird native libraries..." -ForegroundColor Cyan
+$firebirdSourcePath = "src/DatabaseMigrationTool/firebird"
+
+if (Test-Path $firebirdSourcePath) {
+    # Copy only essential DLL files to root directory (sufficient for runtime)
+    $firebirdDlls = Get-ChildItem -Path $firebirdSourcePath -Filter "*.dll"
+    foreach ($dll in $firebirdDlls) {
+        Copy-Item -Path $dll.FullName -Destination $publishPath -Force
+        Write-Host "  - Copied $($dll.Name)" -ForegroundColor Gray
+    }
+    
+    Write-Host "[OK] Firebird native libraries deployed to root directory" -ForegroundColor Green
+    Write-Host "     Note: Firebird subdirectory not needed for single-file deployment" -ForegroundColor Gray
+} else {
+    Write-Host "[!] Firebird source directory not found: $firebirdSourcePath" -ForegroundColor Yellow
+}
+
 # Check what files were created
 $exeFiles = Get-ChildItem -Path $publishPath -Filter "*.exe"
 $dllFiles = Get-ChildItem -Path $publishPath -Filter "*.dll"
@@ -71,7 +89,7 @@ foreach ($exe in $exeFiles) {
 }
 
 if ($dllFiles.Count -gt 0) {
-    Write-Host "[!] Remaining DLL files:" -ForegroundColor Yellow
+    Write-Host "[*] Native library files (required for Firebird support):" -ForegroundColor Cyan
     foreach ($dll in $dllFiles) {
         $dllSizeMB = [math]::Round($dll.Length / 1MB, 2)
         Write-Host "  - $($dll.Name) ($dllSizeMB MB)" -ForegroundColor Gray
@@ -79,7 +97,7 @@ if ($dllFiles.Count -gt 0) {
 }
 
 if ($otherFiles.Count -gt 0) {
-    Write-Host "[*] Other files:" -ForegroundColor Cyan
+    Write-Host "[*] Support files:" -ForegroundColor Cyan
     foreach ($file in $otherFiles) {
         if ($file.PSIsContainer) {
             $itemCount = (Get-ChildItem -Path $file.FullName -Recurse).Count

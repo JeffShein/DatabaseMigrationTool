@@ -67,6 +67,12 @@ The project includes comprehensive distribution tools for professional Windows d
 cd installer
 .\build-msi.ps1
 
+# Build single-file executable (self-contained)
+.\build-single-exe.ps1
+
+# Build single-file executable with trimming (smaller size)
+.\build-single-exe.ps1 -Trimmed
+
 # Clean build with custom output
 .\build-distribution.ps1 -Clean -OutputPath "./release"
 ```
@@ -74,6 +80,7 @@ cd installer
 **Distribution Options**:
 - **ZIP Archive**: Portable, self-contained distribution with no installation required
 - **MSI Installer**: Professional Windows installer with Start Menu integration, file associations, and uninstall support
+- **Single-File Executable**: Completely self-contained executable with all dependencies embedded (use `build-single-exe.ps1`)
 
 See `DISTRIBUTION.md` for complete packaging and deployment documentation.
 
