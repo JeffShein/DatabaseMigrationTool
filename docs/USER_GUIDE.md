@@ -220,6 +220,28 @@ export_directory/
 - **Conflict Detection**: Identifies existing tables that would be affected
 - **Overwrite Confirmation**: User approval required for data overwrites
 - **Dependency Analysis**: Ensures proper import order for foreign keys
+- **Schema Awareness**: Handles different schema naming conventions across database types
+
+#### Overwrite and Conflict Management
+The application provides comprehensive overwrite detection for both export and import operations:
+
+**Export Overwrite Protection**:
+- Detects existing export files in target directory
+- Shows detailed information about existing export contents
+- Requires user confirmation before overwriting
+- Displays export metadata (date, table count, file sizes)
+
+**Import Conflict Detection**:
+- **Schema Conflicts**: Identifies tables that already exist and would conflict with schema creation
+- **Data Conflicts**: Shows tables with existing data that would be affected
+- **Cross-Database Mapping**: Handles schema differences (e.g., SQL Server 'dbo' vs Firebird 'SYSDB')
+- **Row Count Analysis**: Shows how many rows exist in conflicting tables
+
+**Conflict Resolution Options**:
+- Skip conflicting tables and continue with others
+- Drop and recreate existing tables (destructive)
+- Append data to existing tables (preserves existing data)
+- Cancel operation to resolve conflicts manually
 
 ### Schema Operations
 
@@ -463,10 +485,17 @@ DatabaseMigrationTool.exe diagnose ^
 #### Import Issues
 
 **"Table already exists"**:
-- Use overwrite confirmation dialogs
-- Consider dropping existing tables first
+- Use overwrite confirmation dialogs to handle conflicts
+- Consider dropping existing tables first (destructive option)
 - Use schema-only import to update structure only
 - Check import options for handling existing data
+- The application now detects table conflicts before import begins
+
+**"lock conflict on no wait transaction" (Firebird)**:
+- This connection locking issue has been resolved automatically
+- The application now disables connection pooling for Firebird operations
+- Metadata locks are prevented by isolating DDL operations
+- No user action required - the fix is transparent
 
 **"Foreign key constraint violations"**:
 - Ensure data integrity in source database
@@ -475,10 +504,16 @@ DatabaseMigrationTool.exe diagnose ^
 - Verify referenced tables are imported first
 
 **"Data type conversion errors"**:
-- Review data type mappings between providers
+- Review data type mappings between providers (now includes comprehensive SQL Server to Firebird mapping)
 - Check for incompatible data in source tables
-- Consider data transformation before import
+- Cross-database type conversion is now automatic for common scenarios
 - Use continue-on-error option for non-critical issues
+
+**"Token unknown" SQL errors (Firebird cross-database imports)**:
+- These syntax errors are now automatically resolved
+- SQL Server syntax is converted to Firebird-compatible format
+- Type mappings handle common conversions (NVARCHAR→VARCHAR, DATETIME2→TIMESTAMP, etc.)
+- DEFAULT clause ordering is automatically corrected for Firebird
 
 ### Performance Optimization
 
@@ -523,10 +558,13 @@ DatabaseMigrationTool.exe diagnose ^
 - Monitor PostgreSQL logs for performance issues
 
 **Firebird**:
-- Ensure correct Firebird version selection
+- Ensure correct Firebird version selection (2.5 embedded vs 3.0+ client/server)
 - Use embedded mode for single-user scenarios
-- Consider page size and cache settings
-- Monitor Firebird server performance
+- Connection locking issues are automatically handled by disabling connection pooling
+- Cross-database imports from SQL Server include automatic type mapping
+- Table filtering handles both quoted and unquoted identifier case sensitivity
+- Consider page size and cache settings for performance
+- Monitor Firebird server performance and transaction isolation
 
 ### Error Recovery
 

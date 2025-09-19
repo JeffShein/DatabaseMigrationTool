@@ -407,10 +407,17 @@ namespace DatabaseMigrationTool
                 return;
             }
             
-            // Check for console mode flag or if command-line arguments are provided
+            // Check for special flags
             bool consoleMode = args.Contains("--console") || args.Contains("-c");
+            bool testFirebird = args.Contains("--test-firebird50");
             
-            if (args.Length == 0 || (!consoleMode && args.Length == 1 && args[0] == "--gui"))
+            if (testFirebird)
+            {
+                // Special direct test for Firebird 5.0
+                TestFirebird50Direct();
+                return;
+            }
+            else if (args.Length == 0 || (!consoleMode && args.Length == 1 && args[0] == "--gui"))
             {
                 // No arguments or --gui flag - launch GUI
                 RunGuiMode();
@@ -642,6 +649,76 @@ namespace DatabaseMigrationTool
             return Console.ReadLine() ?? string.Empty;
         }
 
+        private static void TestFirebird50Direct()
+        {
+            Console.WriteLine("=== DIRECT FIREBIRD 5.0 TEST ===");
+            Console.WriteLine();
+
+            try
+            {
+                var provider = new DatabaseMigrationTool.Providers.FirebirdProvider();
+                
+                // Set console logging
+                provider.SetLogger(message => Console.WriteLine($"[FB] {message}"));
+                
+                string testConnectionString1 = "Database=C:\\DEV\\DATABASEMIGRATIONTOOL\\POSNL50.FDB;User=SYSDBA;Password=masterkey;Version=5.0";
+                string testConnectionString2 = "Database=C:\\DEV\\DATABASEMIGRATIONTOOL\\POSNL50.FDB;User=SYSDBA;Password=masterkey";
+                
+                Console.WriteLine("Test 1: Manual Version=5.0 override");
+                Console.WriteLine($"Connection: {testConnectionString1.Replace("masterkey", "******")}");
+                Console.WriteLine();
+                
+                bool test1Success = TestSimpleConnection(provider, testConnectionString1);
+
+                Console.WriteLine();
+                Console.WriteLine("Test 2: Automatic detection");
+                Console.WriteLine($"Connection: {testConnectionString2.Replace("masterkey", "******")}");
+                Console.WriteLine();
+
+                bool test2Success = TestSimpleConnection(provider, testConnectionString2);
+                
+                Console.WriteLine();
+                Console.WriteLine("=== RESULTS ===");
+                Console.WriteLine($"Manual Version=5.0: {(test1Success ? "SUCCESS" : "FAILED")}");
+                Console.WriteLine($"Automatic detection: {(test2Success ? "SUCCESS" : "FAILED")}");
+                
+                if (!test1Success && !test2Success)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Both tests failed. FirebirdSql.Data.FirebirdClient 10.3.3 likely does not support Firebird 5.0 ODS 13.0");
+                    Console.WriteLine("Recommended solutions:");
+                    Console.WriteLine("1. Try a newer FirebirdSql.Data.FirebirdClient version");
+                    Console.WriteLine("2. Use Firebird 4.0 format database (ODS 13.0 vs 13.1)");
+                    Console.WriteLine("3. Implement native Firebird API P/Invoke wrapper");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Test execution failed: {ex.Message}");
+            }
+            
+            Console.WriteLine();
+            Console.WriteLine("Test completed - check results above.");
+            // Note: Console.ReadKey() removed to avoid issues in redirected console scenarios
+        }
+
+        private static bool TestSimpleConnection(DatabaseMigrationTool.Providers.FirebirdProvider provider, string connectionString)
+        {
+            try
+            {
+                using var connection = provider.CreateConnection(connectionString);
+                connection.Open();
+                connection.Close();
+                Console.WriteLine("✅ Connection successful");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Connection failed: {ex.Message}");
+                return false;
+            }
+        }
+
         private static async Task ProcessCommandLineArgs(string[] args)
         {
             await Parser.Default.ParseArguments<
@@ -651,7 +728,8 @@ namespace DatabaseMigrationTool
                 SchemaCommandOptions,
                 ConfigCommandOptions,
                 DiagnoseOptions,
-                ValidateExportImportOptions
+                ValidateExportImportOptions,
+                TestFirebirdOptions
             >(args)
             .MapResult(
                 (ListProvidersOptions opts) => ListProviders(opts),
@@ -661,6 +739,7 @@ namespace DatabaseMigrationTool
                 (ConfigCommandOptions opts) => RunConfigCommand(opts),
                 (DiagnoseOptions opts) => DiagnoseCommand.Execute(opts),
                 (ValidateExportImportOptions opts) => ValidateExportImportCommand.Execute(opts),
+                (TestFirebirdOptions opts) => TestFirebirdCommand.Execute(opts),
                 errors => Task.FromResult(1)
             );
         }
@@ -702,8 +781,8 @@ namespace DatabaseMigrationTool
                     return 1;
                 }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
-                var connection = provider.CreateConnection(options.ConnectionString);
-                
+                using var connection = provider.CreateConnection(options.ConnectionString);
+
                 Dictionary<string, string>? tableCriteria = null;
                 if (!string.IsNullOrEmpty(options.TableCriteriaFile) && File.Exists(options.TableCriteriaFile))
                 {
@@ -813,8 +892,8 @@ namespace DatabaseMigrationTool
                     return 1;
                 }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
-                var connection = provider.CreateConnection(options.ConnectionString);
-                
+                using var connection = provider.CreateConnection(options.ConnectionString);
+
                 var importOptions = new ImportOptions
                 {
                     Tables = options.Tables?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
@@ -822,13 +901,14 @@ namespace DatabaseMigrationTool
                     CreateSchema = !options.NoCreateSchema,
                     CreateForeignKeys = !options.NoCreateForeignKeys,
                     SchemaOnly = options.SchemaOnly,
-                    ContinueOnError = options.ContinueOnError
+                    ContinueOnError = options.ContinueOnError,
+                    OverwriteExistingTables = options.ContinueOnError // Enable overwrite when continue-on-error is set
                 };
                 
                 // Check for existing data and get user confirmation
                 Console.WriteLine("Checking for existing data in target database...");
                 var overwriteResult = await Utilities.ImportOverwriteChecker.CheckForExistingDataAsync(
-                    provider, connection, options.InputPath, importOptions);
+                    provider, options.ConnectionString, options.InputPath, importOptions);
                 
                 if (overwriteResult.HasConflictingData)
                 {
@@ -910,8 +990,8 @@ namespace DatabaseMigrationTool
                     return 1;
                 }
                 var provider = DatabaseProviderFactory.Create(options.Provider);
-                var connection = provider.CreateConnection(options.ConnectionString);
-                
+                using var connection = provider.CreateConnection(options.ConnectionString);
+
                 await connection.OpenAsync();
                 
                 var tables = await provider.GetTablesAsync(connection, 

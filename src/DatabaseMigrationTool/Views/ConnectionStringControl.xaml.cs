@@ -258,12 +258,12 @@ namespace DatabaseMigrationTool.Views
                 {
                     // Set defaults if not already set
                     if (string.IsNullOrEmpty(FirebirdUsername))
-                        FirebirdUsername = "SYSDB";
+                        FirebirdUsername = GetFirebirdDefaultUsername();
                     if (string.IsNullOrEmpty(_firebirdPassword))
                         _firebirdPassword = "Hosis11223344";
-                    
+
                     FirebirdPasswordBox.Password = _firebirdPassword;
-                    
+
                     // Set override checkboxes to unchecked by default (fields disabled)
                     if (FirebirdUsernameOverrideCheckBox != null)
                         FirebirdUsernameOverrideCheckBox.IsChecked = false;
@@ -383,10 +383,27 @@ namespace DatabaseMigrationTool.Views
         {
             if (FirebirdUsernameOverrideCheckBox?.IsChecked == false)
             {
-                // Reset to default when override is unchecked
-                FirebirdUsername = "SYSDB";
+                // Reset to version-appropriate default when override is unchecked
+                FirebirdUsername = GetFirebirdDefaultUsername();
             }
             UpdateConnectionString();
+        }
+
+        private string GetFirebirdDefaultUsername()
+        {
+            // Determine default username based on Firebird version
+            if (FirebirdFormatComboBox != null)
+            {
+                switch (FirebirdFormatComboBox.SelectedIndex)
+                {
+                    case 0: // Firebird 5.0/4.0/3.0+
+                        return "SYSDBA";
+                    case 1: // Firebird 2.5
+                    default:
+                        return "SYSDB";
+                }
+            }
+            return "SYSDB"; // Default fallback for 2.5
         }
 
         private void FirebirdPasswordOverride_Changed(object sender, RoutedEventArgs e)
@@ -397,6 +414,16 @@ namespace DatabaseMigrationTool.Views
                 _firebirdPassword = "Hosis11223344";
                 if (FirebirdPasswordBox != null)
                     FirebirdPasswordBox.Password = _firebirdPassword;
+            }
+            UpdateConnectionString();
+        }
+
+        private void FirebirdFormat_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            // Update username default based on Firebird version if override is not checked
+            if (FirebirdUsernameOverrideCheckBox?.IsChecked == false)
+            {
+                FirebirdUsername = GetFirebirdDefaultUsername();
             }
             UpdateConnectionString();
         }
@@ -528,26 +555,28 @@ namespace DatabaseMigrationTool.Views
                             PostgreSqlAdditionalParamsTextBox?.Text ?? string.Empty);
                         break;
                     case 3: // Firebird
-                        string version = "";
+                        string version = "2.5"; // Default to Firebird 2.5
                         if (FirebirdFormatComboBox != null)
                         {
                             // Get version based on selection
                             switch(FirebirdFormatComboBox.SelectedIndex)
                             {
-                                case 1:
-                                    version = "2.5";
+                                case 0:
+                                    version = "5.0"; // Firebird 5.0/4.0/3.0+
                                     break;
+                                case 1:
                                 default:
-                                    version = "";
+                                    version = "2.5"; // Firebird 2.5
                                     break;
                             };
                         }
-                        bool readOnly = FirebirdReadOnlyCheckBox != null ? FirebirdReadOnlyCheckBox.IsChecked ?? true : true;
+                        bool readOnly = false; // Always use read-write mode
 
-                        // Use default values when override is not checked
-                        string username = FirebirdUsernameOverrideCheckBox?.IsChecked == true ? 
-                            FirebirdUsername ?? "SYSDB" : "SYSDB";
-                        string password = FirebirdPasswordOverrideCheckBox?.IsChecked == true ? 
+                        // Use version-appropriate default values when override is not checked
+                        string defaultUsername = GetFirebirdDefaultUsername();
+                        string username = FirebirdUsernameOverrideCheckBox?.IsChecked == true ?
+                            FirebirdUsername ?? defaultUsername : defaultUsername;
+                        string password = FirebirdPasswordOverrideCheckBox?.IsChecked == true ?
                             _firebirdPassword ?? "Hosis11223344" : "Hosis11223344";
 
                         ConnectionString = ConnectionStringBuilder.BuildFirebirdConnectionString(
@@ -643,9 +672,9 @@ namespace DatabaseMigrationTool.Views
                         {
                             FirebirdDatabaseFile = databaseFile;
                             
-                            // Check if username/password are different from defaults
-                            bool usernameIsDefault = username == "SYSDB";
-                            bool passwordIsDefault = password == "Hosis11223344";
+                            // Check if username/password are different from defaults (support both old SYSDB and new SYSDBA)
+                            bool usernameIsDefault = username == "SYSDBA" || username == "SYSDB";
+                            bool passwordIsDefault = password == "masterkey" || password == "Hosis11223344";
                             
                             if (FirebirdUsernameOverrideCheckBox != null)
                             {
@@ -946,8 +975,8 @@ namespace DatabaseMigrationTool.Views
                     profile.DatabasePath = FirebirdDatabaseFile ?? "";
                     profile.Username = FirebirdUsername ?? "";
                     profile.Password = _firebirdPassword ?? "";
-                    profile.ReadOnlyConnection = FirebirdReadOnlyCheckBox?.IsChecked == true;
-                    profile.FirebirdVersion = FirebirdFormatComboBox?.SelectedIndex == 0 ? "3.0" : "2.5";
+                    profile.ReadOnlyConnection = false; // Always use read-write mode
+                    profile.FirebirdVersion = FirebirdFormatComboBox?.SelectedIndex == 0 ? "5.0" : "2.5";
                     break;
             }
             
@@ -1013,10 +1042,9 @@ namespace DatabaseMigrationTool.Views
                     _firebirdPassword = profile.Password;
                     if (FirebirdPasswordBox != null)
                         FirebirdPasswordBox.Password = profile.Password;
-                    if (FirebirdReadOnlyCheckBox != null)
-                        FirebirdReadOnlyCheckBox.IsChecked = profile.ReadOnlyConnection;
+                    // Read-only checkbox removed - always use read-write mode
                     if (FirebirdFormatComboBox != null)
-                        FirebirdFormatComboBox.SelectedIndex = profile.FirebirdVersion == "3.0" ? 0 : 1;
+                        FirebirdFormatComboBox.SelectedIndex = profile.FirebirdVersion == "5.0" ? 0 : 1;
                     break;
             }
             

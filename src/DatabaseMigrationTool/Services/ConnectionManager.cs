@@ -37,22 +37,33 @@ namespace DatabaseMigrationTool.Services
                 {
                     return ConnectionResult.Fail("Provider name is required");
                 }
-                
+
                 if (string.IsNullOrWhiteSpace(connectionString))
                 {
                     return ConnectionResult.Fail("Connection string is required");
                 }
-                
+
                 var provider = DatabaseProviderFactory.Create(providerName);
                 var enhancedConnectionString = EnhanceConnectionStringWithTimeouts(connectionString);
+
+                // For Firebird, always create a new connection instead of using pooling
+                // This prevents metadata locks from being held across operations
+                if (providerName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+                {
+                    var connection = provider.CreateConnection(enhancedConnectionString);
+                    await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+                    return ConnectionResult.Create(connection, connectionString, providerName);
+                }
+
+                // For other database types, use connection pooling
                 var poolKey = GeneratePoolKey(providerName, enhancedConnectionString);
-                
+
                 await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
                     var pool = _connectionPools.GetOrAdd(poolKey, _ => new ConnectionPool(provider, enhancedConnectionString, _settingsService));
                     var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-                    
+
                     return ConnectionResult.Create(connection, connectionString, providerName);
                 }
                 finally
@@ -100,9 +111,24 @@ namespace DatabaseMigrationTool.Services
         {
             if (connection == null)
                 return;
-                
+
             try
             {
+                // Check if this is a Firebird connection by examining the connection type
+                bool isFirebirdConnection = connection.GetType().Name.Contains("FbConnection", StringComparison.OrdinalIgnoreCase);
+
+                if (isFirebirdConnection)
+                {
+                    // Always close and dispose Firebird connections to release metadata locks
+                    if (connection.State != System.Data.ConnectionState.Closed)
+                    {
+                        await connection.CloseAsync();
+                    }
+                    connection.Dispose();
+                    return;
+                }
+
+                // For non-Firebird connections, use normal pooling logic
                 var poolKey = FindPoolKeyForConnection(connection);
                 if (poolKey != null && _connectionPools.TryGetValue(poolKey, out var pool))
                 {
@@ -146,6 +172,33 @@ namespace DatabaseMigrationTool.Services
                 _semaphore.Release();
             }
         }
+
+        /// <summary>
+        /// Forcibly closes all connections and ensures clean state for Firebird DDL operations
+        /// This is particularly important for Firebird metadata operations that require exclusive access
+        /// </summary>
+        public async Task EnsureCleanStateForFirebirdDDLAsync()
+        {
+            await _semaphore.WaitAsync();
+            try
+            {
+                // Close all connection pools to ensure no lingering connections
+                await CloseAllConnectionsAsync();
+
+                // Give Firebird a moment to release all locks
+                await Task.Delay(500);
+
+                // Force garbage collection to ensure disposed connections are cleaned up
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                Console.WriteLine("DEBUG: Ensured clean state for Firebird DDL operations");
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
         
         private static string GeneratePoolKey(string providerName, string connectionString)
         {
@@ -183,24 +236,53 @@ namespace DatabaseMigrationTool.Services
         private string EnhanceConnectionStringWithTimeouts(string originalConnectionString)
         {
             var settings = _settingsService.Settings.Performance;
-            var builder = new System.Data.Common.DbConnectionStringBuilder
+
+            // For Firebird connections, use manual parsing instead of DbConnectionStringBuilder
+            // DbConnectionStringBuilder can corrupt Firebird connection strings
+            if (originalConnectionString.Contains("Database=", StringComparison.OrdinalIgnoreCase) &&
+                (originalConnectionString.Contains(".fdb", StringComparison.OrdinalIgnoreCase) ||
+                 originalConnectionString.Contains(".gdb", StringComparison.OrdinalIgnoreCase)))
             {
-                ConnectionString = originalConnectionString
-            };
-            
-            // Add connection timeout if not already specified
-            if (!builder.ContainsKey("Connection Timeout") && !builder.ContainsKey("ConnectionTimeout"))
-            {
-                builder["Connection Timeout"] = settings.ConnectionTimeout;
+                // This is likely a Firebird connection string - handle manually
+                string enhanced = originalConnectionString;
+
+                // Add connection timeout if not present
+                if (!enhanced.Contains("Connection Timeout", StringComparison.OrdinalIgnoreCase) &&
+                    !enhanced.Contains("ConnectionTimeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    enhanced += $";Connection Timeout={settings.ConnectionTimeout}";
+                }
+
+                return enhanced;
             }
-            
-            // Add command timeout if not already specified  
-            if (!builder.ContainsKey("Command Timeout") && !builder.ContainsKey("CommandTimeout"))
+
+            // For other connection types, use the standard approach
+            try
             {
-                builder["Command Timeout"] = settings.CommandTimeout;
+                var builder = new System.Data.Common.DbConnectionStringBuilder
+                {
+                    ConnectionString = originalConnectionString
+                };
+
+                // Add connection timeout if not already specified
+                if (!builder.ContainsKey("Connection Timeout") && !builder.ContainsKey("ConnectionTimeout"))
+                {
+                    builder["Connection Timeout"] = settings.ConnectionTimeout;
+                }
+
+                // Add command timeout if not already specified
+                if (!builder.ContainsKey("Command Timeout") && !builder.ContainsKey("CommandTimeout"))
+                {
+                    builder["Command Timeout"] = settings.CommandTimeout;
+                }
+
+                return builder.ConnectionString;
             }
-            
-            return builder.ConnectionString;
+            catch
+            {
+                // If DbConnectionStringBuilder fails, return original string
+                return originalConnectionString;
+            }
         }
     }
     
@@ -336,7 +418,7 @@ namespace DatabaseMigrationTool.Services
         
         private static bool IsConnectionValid(DbConnection connection)
         {
-            return connection != null && 
+            return connection != null &&
                    connection.State == System.Data.ConnectionState.Open;
         }
         

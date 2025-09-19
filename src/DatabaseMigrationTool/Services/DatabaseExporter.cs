@@ -4,6 +4,7 @@ using MessagePack;
 using MessagePack.Resolvers;
 using SharpCompress.Compressors;
 using SharpCompress.Compressors.BZip2;
+using System.Data;
 using System.Data.Common;
 using System.IO;
 using System.IO.Compression;
@@ -18,6 +19,8 @@ namespace DatabaseMigrationTool.Services
         private readonly ExportOptions _options;
         private Action<string>? _logger;
         private ProgressReportHandler? _progressReporter;
+        private StreamWriter? _logWriter;
+        private string? _logFilePath;
 
         public DatabaseExporter(IDatabaseProvider provider, DbConnection connection, ExportOptions options)
         {
@@ -40,15 +43,12 @@ namespace DatabaseMigrationTool.Services
         private void Log(string message)
         {
             _logger?.Invoke(message);
-            
-            // Also log to error log file for easier troubleshooting
-            try 
+
+            // Also log to timestamped log file for easier troubleshooting
+            try
             {
-                if (!string.IsNullOrEmpty(outputPath))
-                {
-                    string logPath = Path.Combine(outputPath, "export_log.txt");
-                    File.AppendAllText(logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}{Environment.NewLine}");
-                }
+                _logWriter?.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}");
+                _logWriter?.Flush(); // Ensure log is written immediately
             }
             catch
             {
@@ -73,7 +73,7 @@ namespace DatabaseMigrationTool.Services
         {
             // Store output path for error reporting
             this.outputPath = outputPath;
-            
+
             // Report initial progress
             ReportProgress(0, 100, "Starting database export...", true);
             
@@ -85,9 +85,9 @@ namespace DatabaseMigrationTool.Services
                 // For filtering by table name, we first get all tables and filter in memory to ensure accuracy
                 if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
                 {
-                    // For Firebird, we get all tables first and then filter in memory to avoid SQL issues
-                    Log("Using memory filtering for Firebird tables");
-                    List<TableSchema> allTables = await _provider.GetTablesAsync(_connection).ConfigureAwait(false);
+                    // For Firebird, use the provider's filtering which handles SQL properly
+                    Log($"Getting filtered tables for Firebird: {string.Join(", ", _options.Tables)}");
+                    List<TableSchema> allTables = await _provider.GetTablesAsync(_connection, _options.Tables).ConfigureAwait(false);
                     
                     // Convert table names to uppercase for Firebird case-insensitive comparison
                     HashSet<string> requestedTablesUpper = new HashSet<string>(
@@ -121,6 +121,19 @@ namespace DatabaseMigrationTool.Services
             
             // Write metadata
             Directory.CreateDirectory(outputPath);
+
+            // Create timestamped log file like import does
+            _logFilePath = Path.Combine(outputPath, $"export_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            try
+            {
+                _logWriter = new StreamWriter(_logFilePath, false);
+                Log($"Export log file created at: {_logFilePath}");
+            }
+            catch
+            {
+                _logWriter = null;
+            }
+
             var databaseName = _connection.Database ?? "Unknown";
             
             await Utilities.MetadataManager.WriteMetadataAsync(
@@ -233,6 +246,14 @@ namespace DatabaseMigrationTool.Services
             
             // Report final progress
             ReportProgress(100, 100, "Database export completed successfully!");
+            Log("Database export completed successfully!");
+
+            // Close log file
+            if (_logWriter != null)
+            {
+                _logWriter.Close();
+                _logWriter.Dispose();
+            }
         }
 
         // Improved export method with batched processing for large tables
@@ -259,29 +280,34 @@ namespace DatabaseMigrationTool.Services
                 // Update progress with current file name
                 fileProgressHandler?.Invoke(fileName);
                     
-                // For Firebird special case: add dialect and isolation level parameters
-                string connectionString = _connection.ConnectionString;
-                DbConnection? directConnection = null;
-                
-                // For Firebird tables, use consistent approach with special parameters
+                // For Firebird embedded mode, reuse existing connection to avoid file locking issues
+                DbConnection directConnection;
+                bool shouldDisposeConnection = false;
+
                 if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Add consistent dialect and isolation level parameters
-                    Log("Adding special parameters for Firebird table");
-                    connectionString = connectionString + ";Dialect=3;IsolationLevel=ReadCommitted";
+                    Log("Firebird detected - reusing existing connection to avoid embedded mode conflicts");
+                    directConnection = _connection;
+
+                    // Ensure connection is open
+                    if (directConnection.State != ConnectionState.Open)
+                    {
+                        await directConnection.OpenAsync();
+                    }
                 }
-                
-                // Create connection with potentially modified connection string
-                directConnection = _provider.CreateConnection(connectionString);
-                
-                // Create a fresh connection for this specific operation
-                // This ensures we're using exactly the same approach as the schema view
-                using (directConnection)
+                else
                 {
-                    // Log the connection string for debugging
+                    // For other providers, create a new connection as before
+                    string connectionString = _connection.ConnectionString;
+                    directConnection = _provider.CreateConnection(connectionString);
+                    shouldDisposeConnection = true;
+
                     Log($"Using connection string (masked): {System.Text.RegularExpressions.Regex.Replace(directConnection.ConnectionString, @"Password=[^;]*", "Password=******", System.Text.RegularExpressions.RegexOptions.IgnoreCase)}");
-                    
                     await directConnection.OpenAsync();
+                }
+
+                try
+                {
                         
                     // First, determine if we need to count rows
                     int rowCount = 0;
@@ -907,6 +933,18 @@ namespace DatabaseMigrationTool.Services
                                 } // Close transaction using block
                             }
                         }
+                    }
+                }
+                catch
+                {
+                    throw;
+                }
+                finally
+                {
+                    // Only dispose connection if we created it (not reused for Firebird)
+                    if (shouldDisposeConnection)
+                    {
+                        directConnection?.Dispose();
                     }
                 }
             }

@@ -144,7 +144,7 @@ namespace DatabaseMigrationTool.Services
                 
                 var importOptions = CreateImportOptions(config);
                 var overwriteResult = await ImportOverwriteChecker.CheckForExistingDataAsync(
-                    provider, connection, config.InputPath!, importOptions);
+                    provider, config.ConnectionString!, config.InputPath!, importOptions);
                 
                 if (overwriteResult.HasConflictingData)
                 {

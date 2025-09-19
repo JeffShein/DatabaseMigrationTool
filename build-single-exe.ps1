@@ -58,20 +58,32 @@ if ($LASTEXITCODE -ne 0) {
 
 # Copy Firebird DLLs for single-file deployment
 Write-Host "Copying Firebird native libraries..." -ForegroundColor Cyan
-$firebirdSourcePath = "src/DatabaseMigrationTool/firebird"
 
-if (Test-Path $firebirdSourcePath) {
-    # Copy only essential DLL files to root directory (sufficient for runtime)
-    $firebirdDlls = Get-ChildItem -Path $firebirdSourcePath -Filter "*.dll"
-    foreach ($dll in $firebirdDlls) {
+$firebird25Path = "src/DatabaseMigrationTool/Firebird_2_5"
+$firebird50Path = "src/DatabaseMigrationTool/Firebird_5_0"
+
+if ((Test-Path $firebird25Path) -and (Test-Path $firebird50Path)) {
+    # Copy Firebird 2.5 DLLs (for backward compatibility)
+    $fb25Dlls = Get-ChildItem -Path $firebird25Path -Filter "*.dll"
+    foreach ($dll in $fb25Dlls) {
         Copy-Item -Path $dll.FullName -Destination $publishPath -Force
-        Write-Host "  - Copied $($dll.Name)" -ForegroundColor Gray
+        Write-Host "  - Copied $($dll.Name) (FB 2.5)" -ForegroundColor Gray
     }
     
-    Write-Host "[OK] Firebird native libraries deployed to root directory" -ForegroundColor Green
-    Write-Host "     Note: Firebird subdirectory not needed for single-file deployment" -ForegroundColor Gray
+    # Copy essential Firebird 5.0 DLLs (overwrites fbclient.dll for FB 5.0 support)
+    $fb50Essential = @("fbclient.dll", "ib_util.dll", "icu*.dll", "msvcp140.dll", "vcruntime140*.dll", "zlib1.dll")
+    foreach ($pattern in $fb50Essential) {
+        $fb50Files = Get-ChildItem -Path $firebird50Path -Filter $pattern -ErrorAction SilentlyContinue
+        foreach ($file in $fb50Files) {
+            Copy-Item -Path $file.FullName -Destination $publishPath -Force
+            Write-Host "  - Copied $($file.Name) (FB 5.0)" -ForegroundColor Gray
+        }
+    }
+    
+    Write-Host "[OK] Both Firebird 2.5 and 5.0 libraries deployed" -ForegroundColor Green
+    Write-Host "     Note: Application will use correct DLL set based on data format selection" -ForegroundColor Gray
 } else {
-    Write-Host "[!] Firebird source directory not found: $firebirdSourcePath" -ForegroundColor Yellow
+    Write-Host "[!] Firebird directories not found: $firebird25Path or $firebird50Path" -ForegroundColor Yellow
 }
 
 # Check what files were created

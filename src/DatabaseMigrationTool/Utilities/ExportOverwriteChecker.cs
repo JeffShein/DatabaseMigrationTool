@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using DatabaseMigrationTool.Models;
 
 namespace DatabaseMigrationTool.Utilities
@@ -22,27 +23,39 @@ namespace DatabaseMigrationTool.Utilities
 
             var existingFiles = new List<string>();
             var conflictingTables = new List<string>();
-            
+
             // Check if this is a valid export
             if (MetadataManager.IsValidExport(outputDirectory))
             {
                 // Get conflicting tables
                 var conflicts = await MetadataManager.GetConflictingTablesAsync(outputDirectory, tablesToExport ?? new List<string>());
                 conflictingTables.AddRange(conflicts);
-                
-                // Note: We don't warn about export_manifest.json and dependencies.json 
+
+                // Read existing export metadata to get actual schema information
+                DatabaseExport? existingExport = null;
+                try
+                {
+                    existingExport = await MetadataManager.ReadMetadataAsync(outputDirectory);
+                }
+                catch (Exception ex)
+                {
+                    // If we can't read metadata, continue with default behavior
+                    System.Diagnostics.Debug.WriteLine($"Warning: Could not read existing export metadata: {ex.Message}");
+                }
+
+                // Note: We don't warn about export_manifest.json and dependencies.json
                 // because they are updated/merged, not overwritten
-                
+
                 // Add specific table metadata files that would be overwritten
                 var metadataDir = Path.Combine(outputDirectory, "table_metadata");
                 if (Directory.Exists(metadataDir) && tablesToExport != null)
                 {
                     foreach (var tableSpec in tablesToExport)
                     {
-                        var (schema, tableName) = ParseTableSpec(tableSpec);
+                        var (schema, tableName) = ParseTableSpecWithExistingSchema(tableSpec, existingExport);
                         var metadataFile = $"{schema}_{tableName}.meta";
                         var metadataFilePath = Path.Combine(metadataDir, metadataFile);
-                        
+
                         if (File.Exists(metadataFilePath))
                         {
                             existingFiles.Add($"table_metadata/{metadataFile}");
@@ -60,13 +73,25 @@ namespace DatabaseMigrationTool.Utilities
             string dataDir = Path.Combine(outputDirectory, "data");
             if (Directory.Exists(dataDir))
             {
+                // Read existing export metadata to get actual schema information for data files too
+                DatabaseExport? existingExport = null;
+                try
+                {
+                    existingExport = await MetadataManager.ReadMetadataAsync(outputDirectory);
+                }
+                catch (Exception ex)
+                {
+                    // If we can't read metadata, continue with default behavior
+                    System.Diagnostics.Debug.WriteLine($"Warning: Could not read existing export metadata for data files: {ex.Message}");
+                }
+
                 // If no specific tables specified, check all existing files
                 if (tablesToExport == null || tablesToExport.Count == 0)
                 {
                     var dataFiles = Directory.GetFiles(dataDir, "*.bin");
                     var infoFiles = Directory.GetFiles(dataDir, "*.info");
                     var errorFiles = Directory.GetFiles(dataDir, "*.error");
-                    
+
                     existingFiles.AddRange(dataFiles.Select(f => Path.GetFileName(f)));
                     existingFiles.AddRange(infoFiles.Select(f => Path.GetFileName(f)));
                     existingFiles.AddRange(errorFiles.Select(f => Path.GetFileName(f)));
@@ -76,23 +101,12 @@ namespace DatabaseMigrationTool.Utilities
                     // Check only for files that match the tables being exported
                     foreach (string tableSpec in tablesToExport)
                     {
-                        // Parse table specification (could be "schema.table" or just "table")
-                        string schema = "dbo"; // default schema
-                        string tableName = tableSpec;
-                        
-                        if (tableSpec.Contains('.'))
-                        {
-                            var parts = tableSpec.Split('.');
-                            if (parts.Length == 2)
-                            {
-                                schema = parts[0];
-                                tableName = parts[1];
-                            }
-                        }
-                        
+                        // Use existing export schema information to determine correct schema
+                        var (schema, tableName) = ParseTableSpecWithExistingSchema(tableSpec, existingExport);
+
                         // Check for various file patterns that could exist for this table
                         string tableFilePattern = $"{schema}_{tableName}";
-                        
+
                         // Single file pattern
                         string singleFile = $"{tableFilePattern}.bin";
                         string singleFilePath = Path.Combine(dataDir, singleFile);
@@ -101,7 +115,7 @@ namespace DatabaseMigrationTool.Utilities
                             existingFiles.Add(singleFile);
                             conflictingTables.Add(tableSpec);
                         }
-                        
+
                         // Batch file pattern
                         var batchFiles = Directory.GetFiles(dataDir, $"{tableFilePattern}_batch*.bin");
                         if (batchFiles.Length > 0)
@@ -112,7 +126,7 @@ namespace DatabaseMigrationTool.Utilities
                                 conflictingTables.Add(tableSpec);
                             }
                         }
-                        
+
                         // Info and error files
                         string infoFile = $"{tableFilePattern}.info";
                         string infoFilePath = Path.Combine(dataDir, infoFile);
@@ -120,7 +134,7 @@ namespace DatabaseMigrationTool.Utilities
                         {
                             existingFiles.Add(infoFile);
                         }
-                        
+
                         string errorFile = $"{tableFilePattern}.error";
                         string errorFilePath = Path.Combine(dataDir, errorFile);
                         if (File.Exists(errorFilePath))
@@ -131,7 +145,7 @@ namespace DatabaseMigrationTool.Utilities
                 }
             }
             
-            // Note: We don't check for log files (export_log.txt, export_skipped_tables.txt) 
+            // Note: We don't check for log files (export_log_*.txt, export_skipped_tables.txt)
             // as these are just logging files and it's acceptable to overwrite them
             
             return new ExportOverwriteResult
@@ -164,6 +178,34 @@ namespace DatabaseMigrationTool.Utilities
         }
 
         /// <summary>
+        /// Parse table specification using existing export metadata to determine correct schema
+        /// </summary>
+        private static (string schema, string tableName) ParseTableSpecWithExistingSchema(string tableSpec, DatabaseExport? existingExport)
+        {
+            // If tableSpec already includes schema (e.g., "SYSDB.APPDATA"), use it directly
+            if (tableSpec.Contains('.'))
+            {
+                var parts = tableSpec.Split('.');
+                return parts.Length == 2 ? (parts[0], parts[1]) : ("dbo", tableSpec);
+            }
+
+            // If we have existing export metadata, try to find the schema for this table
+            if (existingExport?.Schemas != null)
+            {
+                var existingTable = existingExport.Schemas.FirstOrDefault(t =>
+                    t.Name.Equals(tableSpec, StringComparison.OrdinalIgnoreCase));
+
+                if (existingTable != null && !string.IsNullOrEmpty(existingTable.Schema))
+                {
+                    return (existingTable.Schema, tableSpec);
+                }
+            }
+
+            // Fallback to default schema
+            return ("dbo", tableSpec);
+        }
+
+        /// <summary>
         /// Deletes only the files for specific tables being overwritten
         /// </summary>
         public static void DeleteConflictingTables(string outputDirectory, List<string> tablesToOverwrite)
@@ -172,16 +214,28 @@ namespace DatabaseMigrationTool.Utilities
             {
                 return;
             }
-            
+
             try
             {
                 var dataDir = Path.Combine(outputDirectory, "data");
                 var metadataDir = Path.Combine(outputDirectory, "table_metadata");
-                
+
+                // Read existing export metadata to get actual schema information
+                DatabaseExport? existingExport = null;
+                try
+                {
+                    existingExport = MetadataManager.ReadMetadataAsync(outputDirectory).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    // If we can't read metadata, continue with default behavior
+                    System.Diagnostics.Debug.WriteLine($"Warning: Could not read existing export metadata for deletion: {ex.Message}");
+                }
+
                 foreach (var tableSpec in tablesToOverwrite)
                 {
-                    var (schema, tableName) = ParseTableSpec(tableSpec);
-                    
+                    var (schema, tableName) = ParseTableSpecWithExistingSchema(tableSpec, existingExport);
+
                     // Delete table metadata file
                     if (Directory.Exists(metadataDir))
                     {
@@ -191,33 +245,33 @@ namespace DatabaseMigrationTool.Utilities
                             File.Delete(metadataFile);
                         }
                     }
-                    
+
                     // Delete table data files
                     if (Directory.Exists(dataDir))
                     {
                         var tableFilePattern = $"{schema}_{tableName}";
-                        
+
                         // Single data file
                         var singleFile = Path.Combine(dataDir, $"{tableFilePattern}.bin");
                         if (File.Exists(singleFile))
                         {
                             File.Delete(singleFile);
                         }
-                        
+
                         // Batch data files
                         var batchFiles = Directory.GetFiles(dataDir, $"{tableFilePattern}_batch*.bin");
                         foreach (var batchFile in batchFiles)
                         {
                             File.Delete(batchFile);
                         }
-                        
+
                         // Info and error files
                         var infoFile = Path.Combine(dataDir, $"{tableFilePattern}.info");
                         if (File.Exists(infoFile))
                         {
                             File.Delete(infoFile);
                         }
-                        
+
                         var errorFile = Path.Combine(dataDir, $"{tableFilePattern}.error");
                         if (File.Exists(errorFile))
                         {
@@ -225,7 +279,7 @@ namespace DatabaseMigrationTool.Utilities
                         }
                     }
                 }
-                
+
                 // Note: We don't delete manifest.json or dependencies.json as they get updated, not overwritten
             }
             catch (Exception ex)
@@ -273,14 +327,14 @@ namespace DatabaseMigrationTool.Utilities
                     Directory.Delete(dataDir, recursive: true);
                 }
                 
-                // Delete log files
-                string logFile = Path.Combine(outputDirectory, "export_log.txt");
-                string skippedTablesFile = Path.Combine(outputDirectory, "export_skipped_tables.txt");
-                
-                if (File.Exists(logFile))
+                // Delete log files (including timestamped export logs)
+                var exportLogFiles = Directory.GetFiles(outputDirectory, "export_log_*.txt");
+                foreach (var logFile in exportLogFiles)
                 {
                     File.Delete(logFile);
                 }
+
+                string skippedTablesFile = Path.Combine(outputDirectory, "export_skipped_tables.txt");
                 
                 if (File.Exists(skippedTablesFile))
                 {

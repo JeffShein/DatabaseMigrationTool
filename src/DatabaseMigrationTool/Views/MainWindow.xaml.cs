@@ -378,8 +378,8 @@ namespace DatabaseMigrationTool.Views
         private async Task ExecuteExportAsync(int batchSize)
         {
             // Setup provider and connection
-            var (provider, connection, updateStatus, progressReporter) = SetupExportProviderAndCallbacks();
-            
+            var (provider, connection, updateStatus, progressReporter) = await SetupExportProviderAndCallbacksAsync();
+
             // Run export in background
             await Task.Run(async () =>
             {
@@ -387,15 +387,15 @@ namespace DatabaseMigrationTool.Views
                 {
                     // Build export options from UI
                     var options = BuildExportOptionsFromUI(batchSize);
-                    
+
                     // Handle existing export files
                     var shouldContinue = await HandleExistingExportFilesAsync(options, updateStatus);
                     if (!shouldContinue)
                         return;
-                    
+
                     // Execute the actual export
                     await PerformExportAsync(provider, connection, options, progressReporter, updateStatus);
-                    
+
                     // Handle successful completion
                     await HandleExportSuccessAsync();
                 }
@@ -404,26 +404,38 @@ namespace DatabaseMigrationTool.Views
                     HandleExportBackgroundError(ex);
                     throw;
                 }
+                finally
+                {
+                    // Ensure connection is properly returned/disposed
+                    await _connectionManager.ReturnConnectionAsync(connection).ConfigureAwait(false);
+                }
             });
         }
 
-        private (IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter) SetupExportProviderAndCallbacks()
+        private async Task<(IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter)> SetupExportProviderAndCallbacksAsync()
         {
             // Get provider
             string providerName = GetSelectedProviderName(ExportProviderIndex);
             var provider = DatabaseProviderFactory.Create(providerName);
-            
-            // Create connection - with additional logging to diagnose any issues
+
+            // Create connection using ConnectionManager (like schema view does)
             StatusTextBlock.Text = "Creating connection to source database...";
-            
+
             // Set logger to capture detailed connection information
             provider.SetLogger(message => {
                 Dispatcher.Invoke(() => {
                     StatusTextBlock.Text = message;
                 });
             });
-            
-            var connection = provider.CreateConnection(ExportConnectionString);
+
+            // Use ConnectionManager instead of direct connection creation
+            var connectionResult = await _connectionManager.GetConnectionAsync(providerName, ExportConnectionString).ConfigureAwait(false);
+            if (!connectionResult.Success)
+            {
+                throw new InvalidOperationException($"Failed to get connection: {connectionResult.ErrorMessage}");
+            }
+
+            var connection = connectionResult.Data!;
             StatusTextBlock.Text = "Connection created successfully, preparing to export...";
             
             // Create progress handler to update status
@@ -483,8 +495,14 @@ namespace DatabaseMigrationTool.Views
 
         private async Task<bool> HandleExistingExportFilesAsync(ExportOptions options, Action<string> updateStatus)
         {
+            // Debug: Log what we're checking
+            updateStatus($"DEBUG: Checking for existing export in: {options.OutputDirectory}");
+            updateStatus($"DEBUG: Tables filter: {(options.Tables?.Count > 0 ? string.Join(",", options.Tables) : "ALL TABLES")}");
+
             // Check for existing export and get user confirmation
             var overwriteResult = await ExportOverwriteChecker.CheckForTableSpecificOverwriteAsync(options.OutputDirectory!, options.Tables).ConfigureAwait(false);
+
+            updateStatus($"DEBUG: HasExistingExport = {overwriteResult.HasExistingExport}");
             
             if (!overwriteResult.HasExistingExport)
                 return true;
@@ -492,12 +510,15 @@ namespace DatabaseMigrationTool.Views
             bool shouldOverwrite = false;
             
             // Show confirmation dialog on UI thread
+            updateStatus("DEBUG: About to show overwrite dialog");
             await Dispatcher.InvokeAsync(() =>
             {
+                updateStatus("DEBUG: Creating overwrite dialog");
                 var overwriteDialog = new ExportOverwriteDialog(overwriteResult);
                 overwriteDialog.Owner = GetWindow(this);
                 bool? result = overwriteDialog.ShowDialog();
                 shouldOverwrite = result == true && overwriteDialog.ShouldOverwrite;
+                updateStatus($"DEBUG: Dialog result = {result}, ShouldOverwrite = {shouldOverwrite}");
             });
             
             if (!shouldOverwrite)
@@ -709,25 +730,31 @@ namespace DatabaseMigrationTool.Views
 
         private async Task ExecuteImportAsync(int batchSize)
         {
-            // Setup provider and connection
-            var (provider, connection, updateStatus, progressReporter) = SetupImportProviderAndCallbacks();
-            
+            // Capture UI values on UI thread before starting background task
+            string connectionString = ImportConnectionString;
+            string providerName = GetSelectedProviderName(ImportProviderIndex);
+
             // Run import in background
             await Task.Run(async () =>
             {
+                System.Data.Common.DbConnection? connection = null;
                 try
                 {
+                    // Setup provider and connection using ConnectionManager
+                    var (provider, conn, updateStatus, progressReporter) = await SetupImportProviderAndCallbacksAsync(providerName, connectionString);
+                    connection = conn;
+
                     // Build import options from UI
                     var options = BuildImportOptionsFromUI(batchSize);
-                    
+
                     // Handle existing import data
-                    var shouldContinue = await HandleExistingImportDataAsync(provider, connection, options, updateStatus);
+                    var shouldContinue = await HandleExistingImportDataAsync(provider, connection, connectionString, options, updateStatus);
                     if (!shouldContinue)
                         return;
-                    
+
                     // Execute the actual import
                     await PerformImportAsync(provider, connection, options, progressReporter, updateStatus);
-                    
+
                     // Handle successful completion
                     await HandleImportSuccessAsync();
                 }
@@ -736,27 +763,45 @@ namespace DatabaseMigrationTool.Views
                     HandleImportBackgroundError(ex);
                     throw;
                 }
+                finally
+                {
+                    // Ensure connection is properly returned/disposed
+                    if (connection != null)
+                    {
+                        await _connectionManager.ReturnConnectionAsync(connection).ConfigureAwait(false);
+                    }
+                }
             });
         }
 
-        private (IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter) SetupImportProviderAndCallbacks()
+        private async Task<(IDatabaseProvider provider, System.Data.Common.DbConnection connection, Action<string> updateStatus, ProgressReportHandler progressReporter)> SetupImportProviderAndCallbacksAsync(string providerName, string connectionString)
         {
             // Get provider
-            string providerName = GetSelectedProviderName(ImportProviderIndex);
             var provider = DatabaseProviderFactory.Create(providerName);
-            
-            // Create connection - with additional logging to diagnose any issues
-            StatusTextBlock.Text = "Creating connection to target database...";
-            
+
+            // Create connection using ConnectionManager
+            Dispatcher.Invoke(() => {
+                StatusTextBlock.Text = "Creating connection to target database...";
+            });
+
             // Set logger to capture detailed connection information
             provider.SetLogger(message => {
                 Dispatcher.Invoke(() => {
                     StatusTextBlock.Text = message;
                 });
             });
-            
-            var connection = provider.CreateConnection(ImportConnectionString);
-            StatusTextBlock.Text = "Connection created successfully, preparing to import...";
+
+            // Use ConnectionManager instead of direct connection creation
+            var connectionResult = await _connectionManager.GetConnectionAsync(providerName, connectionString).ConfigureAwait(false);
+            if (!connectionResult.Success)
+            {
+                throw new InvalidOperationException($"Failed to get connection: {connectionResult.ErrorMessage}");
+            }
+
+            var connection = connectionResult.Data!;
+            Dispatcher.Invoke(() => {
+                StatusTextBlock.Text = "Connection created successfully, preparing to import...";
+            });
             
             // Create progress handler to update status
             Action<string> updateStatus = (message) => 
@@ -837,7 +882,7 @@ namespace DatabaseMigrationTool.Views
             };
         }
 
-        private async Task<bool> HandleExistingImportDataAsync(IDatabaseProvider provider, System.Data.Common.DbConnection connection, ImportOptions options, Action<string> updateStatus)
+        private async Task<bool> HandleExistingImportDataAsync(IDatabaseProvider provider, System.Data.Common.DbConnection connection, string connectionString, ImportOptions options, Action<string> updateStatus)
         {
             // Cache the text value on the background thread to avoid cross-thread access
             string importPath = Dispatcher.Invoke(() => ImportInputDirectoryTextBox.Text);
@@ -845,7 +890,7 @@ namespace DatabaseMigrationTool.Views
             // Check for existing data and get user confirmation
             updateStatus("Checking for existing data in target database...");
             var overwriteResult = await ImportOverwriteChecker.CheckForExistingDataAsync(
-                provider, connection, importPath, options).ConfigureAwait(false);
+                provider, connectionString, importPath, options).ConfigureAwait(false);
             
             if (overwriteResult.HasConflictingData)
             {
@@ -869,7 +914,9 @@ namespace DatabaseMigrationTool.Views
                     });
                     return false;
                 }
-                
+
+                // User confirmed overwrite - set the flag in options
+                options.OverwriteExistingTables = true;
                 updateStatus("User confirmed import - proceeding with data overwrite...");
             }
             else if (!string.IsNullOrEmpty(overwriteResult.Message))

@@ -133,5 +133,30 @@ dotnet run -- export \
 
 ## Requirements
 
-- .NET 7.0 or later
+- .NET 9.0 SDK
+- Windows OS (for WPF GUI)
 - Appropriate database drivers for the source and target databases
+
+## Documentation
+
+- [User Guide](docs/USER_GUIDE.md) - Comprehensive end-user documentation
+- [Developer Guide](docs/CLAUDE.md) - Development setup and guidelines
+- [Architecture](docs/ARCHITECTURE.md) - System architecture and design patterns
+- [Firebird Provider](docs/FIREBIRD.md) - Firebird-specific configuration and troubleshooting
+- [Distribution](docs/DISTRIBUTION.md) - Build and deployment processes
+
+## GUI Mode
+
+The application also provides a user-friendly WPF interface:
+
+```bash
+# Launch GUI mode
+dotnet run
+```
+
+Features include:
+- Visual connection configuration with profiles
+- Table selection browser with search
+- Progress monitoring for long operations
+- Export/import overwrite detection and confirmation
+- Schema visualization and browsing

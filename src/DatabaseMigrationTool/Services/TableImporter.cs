@@ -54,12 +54,26 @@ namespace DatabaseMigrationTool.Services
                 Log($"### Using provider: {_provider.ProviderName}, BatchSize: {_batchSize} ###");
                 
                 // For SQL Server, always use 'dbo' schema for SQL operations
-                string effectiveSchema = _provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) 
-                    ? "dbo" 
-                    : (tableSchema.Schema ?? "dbo");
+                // For Firebird, use the actual table owner/schema, don't default to 'dbo'
+                string effectiveSchema;
+                if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+                {
+                    effectiveSchema = "dbo";
+                }
+                else if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For Firebird, use the actual schema/owner name, not 'dbo'
+                    effectiveSchema = tableSchema.Schema ?? "SYSDB"; // Default to SYSDB for Firebird
+                }
+                else
+                {
+                    // For other providers (MySQL, PostgreSQL), use schema as-is or default to 'dbo'
+                    effectiveSchema = tableSchema.Schema ?? "dbo";
+                }
                 
                 // But use original schema for file name searching (files were exported with original schema)
-                string fileSearchSchema = tableSchema.Schema ?? "dbo";
+                // For file search, we should use the actual schema from the export, never default to 'dbo' for Firebird
+                string fileSearchSchema = tableSchema.Schema ?? (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase) ? "SYSDB" : "dbo");
                 string tableFileName = $"{fileSearchSchema}_{tableSchema.Name}";
                 
                 if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(tableSchema.Schema) && !tableSchema.Schema.Equals("dbo", StringComparison.OrdinalIgnoreCase))
@@ -82,13 +96,14 @@ namespace DatabaseMigrationTool.Services
                 
                 Log($"Found {files.Count} data files for {tableSchema.FullName}");
                 
-                // Check if the table has identity columns - need special handling
+                // Check if the table has identity columns - need special handling (SQL Server only)
                 bool hasIdentity = tableSchema.Columns.Any(c => c.IsIdentity);
                 bool identityInsertEnabled = false;
-                
+
+                // Identity insert is only supported and needed for SQL Server
                 if (hasIdentity && _provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
                 {
-                    try 
+                    try
                     {
                         await _connection.ExecuteScalarAsync($"SET IDENTITY_INSERT [{effectiveSchema}].[{tableSchema.Name}] ON");
                         identityInsertEnabled = true;
@@ -98,6 +113,10 @@ namespace DatabaseMigrationTool.Services
                     {
                         Log($"Warning: Failed to enable identity insert: {ex.Message}");
                     }
+                }
+                else if (hasIdentity)
+                {
+                    Log($"Table {tableSchema.FullName} has identity columns but provider {_provider.ProviderName} does not require special identity handling");
                 }
                 
                 try
@@ -166,10 +185,10 @@ namespace DatabaseMigrationTool.Services
                 }
                 finally
                 {
-                    // Make sure to disable identity insert if enabled
-                    if (identityInsertEnabled)
+                    // Make sure to disable identity insert if enabled (SQL Server only)
+                    if (identityInsertEnabled && _provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
                     {
-                        try 
+                        try
                         {
                             await _connection.ExecuteScalarAsync($"SET IDENTITY_INSERT [{effectiveSchema}].[{tableSchema.Name}] OFF");
                             Log($"Identity insert disabled for {tableSchema.FullName}");
@@ -540,26 +559,10 @@ namespace DatabaseMigrationTool.Services
                     continue;
                 }
                 
-                // Execute as a batch
-                string batchSql = string.Join(";\r\n", validInsertStatements);
-                
-                try
+                // Firebird doesn't support batch INSERT statements, so execute individually
+                if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
                 {
-                    int rowsAffected = await _connection.ExecuteNonQueryAsync(batchSql);
-                    Log($"Batch {i / batchSize + 1}: {rowsAffected} rows affected");
-                    
-                    // Verify expected row count
-                    if (rowsAffected != currentBatchSize)
-                    {
-                        Log($"Warning: Expected {currentBatchSize} rows to be affected, but got {rowsAffected}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // On batch failure, try one by one
-                    Log($"Batch insert failed: {ex.Message}");
-                    Log("Attempting row-by-row insert");
-                    
+                    Log($"Using individual INSERT execution for Firebird (batch {i / batchSize + 1})");
                     int successCount = 0;
                     for (int j = 0; j < validInsertStatements.Count; j++)
                     {
@@ -570,7 +573,7 @@ namespace DatabaseMigrationTool.Services
                             {
                                 continue;
                             }
-                            
+
                             await _connection.ExecuteNonQueryAsync(validInsertStatements[j]);
                             successCount++;
                         }
@@ -579,13 +582,63 @@ namespace DatabaseMigrationTool.Services
                             Log($"Error inserting row {i + j + 1}: {rowEx.Message}");
                         }
                     }
-                    
-                    Log($"Row-by-row insert: {successCount}/{currentBatchSize} succeeded");
-                    
+
+                    Log($"Firebird individual insert: {successCount}/{validInsertStatements.Count} succeeded");
+
                     if (successCount == 0)
                     {
-                        // If all individual inserts failed, throw exception
-                        throw new Exception($"All inserts failed for batch {i / batchSize + 1}", ex);
+                        throw new Exception($"All individual inserts failed for Firebird batch {i / batchSize + 1}");
+                    }
+                }
+                else
+                {
+                    // Execute as a batch for other providers (SQL Server, MySQL, PostgreSQL)
+                    string batchSql = string.Join(";\r\n", validInsertStatements);
+
+                    try
+                    {
+                        int rowsAffected = await _connection.ExecuteNonQueryAsync(batchSql);
+                        Log($"Batch {i / batchSize + 1}: {rowsAffected} rows affected");
+
+                        // Verify expected row count
+                        if (rowsAffected != currentBatchSize)
+                        {
+                            Log($"Warning: Expected {currentBatchSize} rows to be affected, but got {rowsAffected}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // On batch failure, try one by one
+                        Log($"Batch insert failed: {ex.Message}");
+                        Log("Attempting row-by-row insert");
+
+                        int successCount = 0;
+                        for (int j = 0; j < validInsertStatements.Count; j++)
+                        {
+                            try
+                            {
+                                // Skip commented-out statements
+                                if (validInsertStatements[j].StartsWith("--"))
+                                {
+                                    continue;
+                                }
+
+                                await _connection.ExecuteNonQueryAsync(validInsertStatements[j]);
+                                successCount++;
+                            }
+                            catch (Exception rowEx)
+                            {
+                                Log($"Error inserting row {i + j + 1}: {rowEx.Message}");
+                            }
+                        }
+
+                        Log($"Row-by-row insert: {successCount}/{currentBatchSize} succeeded");
+
+                        if (successCount == 0)
+                        {
+                            // If all individual inserts failed, throw exception
+                            throw new Exception($"All inserts failed for batch {i / batchSize + 1}", ex);
+                        }
                     }
                 }
             }
@@ -597,11 +650,39 @@ namespace DatabaseMigrationTool.Services
         private string GenerateInsertStatement(TableSchema tableSchema, RowData row)
         {
             // For SQL Server, always use 'dbo' schema regardless of export metadata
-            string effectiveSchema = _provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase) 
-                ? "dbo" 
-                : (tableSchema.Schema ?? "dbo");
-                
-            string tableName = $"[{effectiveSchema}].[{tableSchema.Name}]";
+            // For Firebird, use the actual table owner/schema, don't default to 'dbo'
+            string effectiveSchema;
+            if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+            {
+                effectiveSchema = "dbo";
+            }
+            else if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+            {
+                // For Firebird, use the actual schema/owner name, not 'dbo'
+                effectiveSchema = tableSchema.Schema ?? "SYSDB"; // Default to SYSDB for Firebird
+            }
+            else
+            {
+                // For other providers (MySQL, PostgreSQL), use schema as-is or default to 'dbo'
+                effectiveSchema = tableSchema.Schema ?? "dbo";
+            }
+
+            // Use provider-appropriate identifier escaping
+            string tableName;
+            if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+            {
+                tableName = $"[{effectiveSchema}].[{tableSchema.Name}]";
+            }
+            else if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+            {
+                // For Firebird, use quoted table name to match CREATE TABLE syntax
+                tableName = $"\"{tableSchema.Name}\"";
+            }
+            else
+            {
+                // Use double quotes for PostgreSQL, etc.
+                tableName = $"\"{effectiveSchema}\".\"{tableSchema.Name}\"";
+            }
             
             // Safety check - ensure row has at least some non-null values
             if (row.Values.Count == 0 || row.Values.All(v => v.Value == null))
@@ -623,7 +704,20 @@ namespace DatabaseMigrationTool.Services
                     continue;
                 }
                 
-                columns.Add($"[{pair.Key}]");
+                // Use provider-appropriate identifier escaping for columns
+                if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+                {
+                    columns.Add($"[{pair.Key}]");
+                }
+                else if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For Firebird, use quoted identifiers to match CREATE TABLE syntax
+                    columns.Add($"\"{pair.Key}\"");
+                }
+                else
+                {
+                    columns.Add($"\"{pair.Key}\"");
+                }
                 
                 // Format value based on type
                 string formattedValue;
@@ -633,8 +727,16 @@ namespace DatabaseMigrationTool.Services
                 }
                 else if (pair.Value is string str)
                 {
-                    // Escape quotes in strings
-                    formattedValue = $"'{str.Replace("'", "''")}'";
+                    // Handle string nulls and empty strings
+                    if (str == "NULL" || str == null)
+                    {
+                        formattedValue = "NULL";
+                    }
+                    else
+                    {
+                        // Escape quotes in strings
+                        formattedValue = $"'{str.Replace("'", "''")}'";
+                    }
                 }
                 else if (pair.Value is DateTime dt)
                 {
@@ -654,7 +756,15 @@ namespace DatabaseMigrationTool.Services
                 else
                 {
                     // Use simple ToString for numbers and other types
-                    formattedValue = pair.Value.ToString() ?? "NULL";
+                    string? valueStr = pair.Value.ToString();
+                    if (string.IsNullOrEmpty(valueStr) || valueStr == "NULL")
+                    {
+                        formattedValue = "NULL";
+                    }
+                    else
+                    {
+                        formattedValue = valueStr;
+                    }
                 }
                 
                 values.Add(formattedValue);
@@ -692,11 +802,30 @@ namespace DatabaseMigrationTool.Services
             {
                 await connection.OpenAsync();
             }
-            
+
             using var command = connection.CreateCommand();
             command.CommandText = sql;
             command.CommandTimeout = 300; // Set a longer timeout (5 minutes)
-            return await command.ExecuteNonQueryAsync();
+
+            // Add detailed logging for debugging SQL syntax issues
+            Console.WriteLine($"[SQL DEBUG] About to execute SQL: {sql}");
+            Console.WriteLine($"[SQL DEBUG] SQL length: {sql.Length} characters");
+            if (sql.Length >= 20)
+            {
+                Console.WriteLine($"[SQL DEBUG] Character at position 20: '{sql[19]}' (position 19 in 0-based indexing)");
+                Console.WriteLine($"[SQL DEBUG] First 50 characters: {sql.Substring(0, Math.Min(50, sql.Length))}");
+            }
+
+            try
+            {
+                return await command.ExecuteNonQueryAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SQL ERROR] Failed to execute SQL: {sql}");
+                Console.WriteLine($"[SQL ERROR] Exception: {ex.Message}");
+                throw;
+            }
         }
         
         /// <summary>
@@ -710,11 +839,28 @@ namespace DatabaseMigrationTool.Services
             {
                 await connection.OpenAsync();
             }
-            
+
             using var command = connection.CreateCommand();
             command.CommandText = sql;
             command.CommandTimeout = 300; // Set a longer timeout (5 minutes)
-            return await command.ExecuteScalarAsync();
+
+            // Add detailed logging for debugging SQL syntax issues
+            Console.WriteLine($"[SQL SCALAR DEBUG] About to execute SQL: {sql}");
+            if (sql.Length >= 20)
+            {
+                Console.WriteLine($"[SQL SCALAR DEBUG] Character at position 20: '{sql[19]}' (position 19 in 0-based indexing)");
+            }
+
+            try
+            {
+                return await command.ExecuteScalarAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SQL SCALAR ERROR] Failed to execute SQL: {sql}");
+                Console.WriteLine($"[SQL SCALAR ERROR] Exception: {ex.Message}");
+                throw;
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 using DatabaseMigrationTool.Constants;
 using DatabaseMigrationTool.Models;
+using DatabaseMigrationTool.Services;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -188,26 +189,36 @@ namespace DatabaseMigrationTool.Providers
         /// </summary>
         private FbConnection CreateAndTestConnection(string filePath, Dictionary<string, string> parsedConnectionString)
         {
+            // Determine Firebird version from connection string
+            string version = parsedConnectionString.ContainsKey("Version") ? parsedConnectionString["Version"] : "2.5";
+
             // Create a Firebird connection with appropriate settings
             string fbConnectionString = BuildFirebirdConnectionString(filePath, parsedConnectionString);
             Log($"Connection string: {MaskPassword(fbConnectionString)}");
-            
+
             // Create a connection approach with embedded mode
             Log("Creating Firebird connection with ServerType=1 (Embedded)");
             Log($"File exists: {(_isLocalFile ? "Yes, local file" : "No, server database")}");
             Log($"Connection string: {MaskPassword(fbConnectionString)}");
-            Log("Using embedded mode with fbembed.dll that was working before");
-            
+            Log($"Using Firebird version {version} with DLL switcher");
+
+            // Use FirebirdDllSwitcher to set correct DLL path
+            using var dllSwitcher = new FirebirdDllSwitcher();
+            if (!dllSwitcher.SwitchToVersion(version))
+            {
+                throw new InvalidOperationException($"Failed to switch to Firebird version {version} DLLs");
+            }
+
             FbConnection? connection = null;
             try
             {
                 // Create connection with the built connection string
                 connection = new FbConnection(fbConnectionString);
-                
+
                 // Try to open the connection to test if it works
                 connection.Open();
                 connection.Close();
-                
+
                 Log($"Successfully connected to Firebird database: {filePath}");
                 var successfulConnection = connection;
                 connection = null; // Prevent disposal in finally block
@@ -231,7 +242,12 @@ namespace DatabaseMigrationTool.Providers
         private Dictionary<string, string> ParseConnectionString(string connectionString)
         {
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            
+
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                return result;
+            }
+
             foreach (var part in connectionString.Split(';'))
             {
                 if (string.IsNullOrWhiteSpace(part))
@@ -269,8 +285,12 @@ namespace DatabaseMigrationTool.Providers
             
             // Use standard configuration that works for all tables
             connectionStringBuilder.Append("ServerType=1;"); // Embedded mode
-            connectionStringBuilder.Append("UseSingleConnection=1;");
-            connectionStringBuilder.Append("ClientEncoding=NONE;"); 
+            // Remove UseSingleConnection=1 to prevent connection locks across operations
+            connectionStringBuilder.Append("ClientEncoding=NONE;");
+            // Add transaction isolation to prevent lock conflicts
+            connectionStringBuilder.Append("IsolationLevel=ReadCommitted;");
+            // Disable connection pooling to prevent metadata locks
+            connectionStringBuilder.Append("Pooling=false;"); 
             
             // Use relative path for Firebird client library that works from any location
             string appDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -291,7 +311,7 @@ namespace DatabaseMigrationTool.Providers
                 Log($"Using explicit isolation level: {isolationLevel}");
             }
             
-            Log("Using ServerType=1 (Embedded) and UseSingleConnection=1 parameters with fbembed.dll");
+            Log("Using ServerType=1 (Embedded) parameters with fbembed.dll");
             
             // Always add DataSource=localhost for consistency with schema view
             connectionStringBuilder.Append("DataSource=localhost;");
@@ -326,7 +346,7 @@ namespace DatabaseMigrationTool.Providers
         /// <param name="useVersion3Plus">Ignored parameter</param>
         public void SetFirebirdVersion(bool useVersion3Plus)
         {
-            // Always use ServerType=1 and UseSingleConnection=1 configuration
+            // Always use ServerType=1 configuration
             Log("Always using ServerType=1 with fbembed.dll");
         }
         
@@ -467,36 +487,103 @@ namespace DatabaseMigrationTool.Providers
             // This method doesn't affect the actual connection string used for connections
             if (string.IsNullOrEmpty(connectionString))
                 return connectionString;
-                
+
             return System.Text.RegularExpressions.Regex.Replace(
-                connectionString, 
-                @"Password=[^;]*", 
-                "Password=******", 
+                connectionString,
+                @"Password=[^;]*",
+                "Password=******",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        /// <summary>
+        /// Extracts Firebird version from connection string
+        /// </summary>
+        private string ExtractVersionFromConnectionString(string connectionString)
+        {
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                return "2.5";
+            }
+
+            var parsedConnectionString = ParseConnectionString(connectionString);
+            return parsedConnectionString.ContainsKey("Version") ? parsedConnectionString["Version"] : "2.5";
         }
 
         public override async Task<List<Models.TableSchema>> GetTablesAsync(DbConnection connection, IEnumerable<string>? tableNames = null)
         {
+            // Validate connection parameter first
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection), "Connection cannot be null");
+            }
+
             if (!(connection is FbConnection fbConnection))
             {
                 throw new ArgumentException("Connection is not a valid Firebird connection");
             }
-            
-            Log($"Reading tables from {fbConnection.Database}");
-            
+
+            // Additional validation - check if connection is properly initialized
+            if (fbConnection == null)
+            {
+                throw new ArgumentException("Firebird connection is null after cast");
+            }
+
+            // Try to get connection string for version detection and logging
+            // In some cases (like connection pooling), this might not be accessible
+            string connectionString = string.Empty;
+            string version = "2.5"; // Default version
+            string dbInfo = "Firebird Database";
+
+            try
+            {
+                connectionString = fbConnection.ConnectionString ?? string.Empty;
+                if (!string.IsNullOrEmpty(connectionString))
+                {
+                    version = ExtractVersionFromConnectionString(connectionString);
+                    // Extract database path from connection string for logging
+                    var parsedCs = ParseConnectionString(connectionString);
+                    dbInfo = parsedCs.ContainsKey("Database") ? parsedCs["Database"] : "Firebird Database";
+                }
+            }
+            catch (Exception ex)
+            {
+                // Connection string might not be accessible in pooled connections
+                // This is not fatal - we'll use defaults
+                Log($"Warning: Cannot access connection string (using defaults): {ex.Message}");
+            }
+
+            // Set up DLL switcher for the operation
+            using var dllSwitcher = new FirebirdDllSwitcher();
+            if (!dllSwitcher.SwitchToVersion(version))
+            {
+                Log($"Warning: Failed to switch to Firebird version {version} DLLs");
+            }
+
+            Log($"Reading tables from {dbInfo}");
+
+            // Debug: Log if table filtering is being applied
+            if (tableNames != null && tableNames.Any())
+            {
+                Log($"Filtering for tables: {string.Join(", ", tableNames)}");
+            }
+            else
+            {
+                Log("No table filtering - getting all tables");
+            }
+
             var tables = new List<Models.TableSchema>();
             
             try
             {
-                // Make sure connection is open
+                // Ensure connection is open
                 if (fbConnection.State != ConnectionState.Open)
                 {
                     await fbConnection.OpenAsync();
                 }
-                
+
                 // Query for tables with owner information
                 string query = @"
-                    SELECT 
+                    SELECT
                         rdb$relation_name AS TABLE_NAME,
                         rdb$system_flag AS IS_SYSTEM,
                         rdb$owner_name AS OWNER_NAME
@@ -510,9 +597,27 @@ namespace DatabaseMigrationTool.Providers
                 // Filter by table names if provided
                 if (tableNames != null && tableNames.Any())
                 {
-                    var tableNamesList = tableNames.Select(t => t.Trim().ToUpperInvariant()).ToList();
-                    query = query.Replace("WHERE \r\n                        rdb$view_source IS NULL", 
-                              "WHERE \r\n                        rdb$view_source IS NULL\r\n                        AND rdb$relation_name IN (" + string.Join(",", tableNamesList.Select(t => $"'{t}'")) + ")");
+                    // For Firebird, we need to check both the original case (for quoted identifiers)
+                    // and uppercase (for unquoted identifiers) with proper trimming
+                    var tableConditions = new List<string>();
+                    foreach (var tableName in tableNames.Select(t => t.Trim()))
+                    {
+                        // Add original case (for quoted identifiers like "APPUserRoles")
+                        // Use TRIM to handle potential trailing spaces in system tables (Firebird 2.5 compatible)
+                        tableConditions.Add($"TRIM(TRAILING FROM rdb$relation_name) = '{tableName}'");
+
+                        // Add uppercase (for unquoted identifiers that get stored as uppercase)
+                        string upperName = tableName.ToUpperInvariant();
+                        if (upperName != tableName)
+                        {
+                            tableConditions.Add($"TRIM(TRAILING FROM rdb$relation_name) = '{upperName}'");
+                        }
+                    }
+
+                    var tableFilter = "AND (" + string.Join(" OR ", tableConditions) + ")";
+                    query = query.Replace("rdb$view_source IS NULL", $"rdb$view_source IS NULL\r\n                        {tableFilter}");
+
+                    Log($"Firebird table filter generated: {tableFilter}");
                 }
                 
                 using var command = new FbCommand(query, fbConnection);
@@ -742,7 +847,7 @@ namespace DatabaseMigrationTool.Providers
                 while (reader.Read())
                 {
                     string indexName = reader["INDEX_NAME"]?.ToString()?.Trim() ?? string.Empty;
-                    bool isUnique = Convert.ToBoolean(reader["IS_UNIQUE"]);
+                    bool isUnique = reader["IS_UNIQUE"] != DBNull.Value && Convert.ToBoolean(reader["IS_UNIQUE"]);
                     string columnName = reader["COLUMN_NAME"]?.ToString()?.Trim() ?? string.Empty;
                     
                     if (currentIndexName != indexName)
@@ -1013,7 +1118,22 @@ namespace DatabaseMigrationTool.Providers
                 throw new ArgumentException("Connection is not a valid Firebird connection");
             }
             
-            Log($"Getting data for table {tableName} from {fbConnection.Database}");
+            // Extract database name from connection string instead of using Database property
+            string dbName = "Unknown Database";
+            try
+            {
+                string connectionString = fbConnection?.ConnectionString ?? string.Empty;
+                if (!string.IsNullOrEmpty(connectionString))
+                {
+                    var parsedCs = ParseConnectionString(connectionString);
+                    dbName = parsedCs.ContainsKey("Database") ? parsedCs["Database"] : connectionString;
+                }
+            }
+            catch (Exception)
+            {
+                dbName = "Unknown Database";
+            }
+            Log($"Getting data for table {tableName} from {dbName}");
             
             try
             {
@@ -1075,7 +1195,22 @@ namespace DatabaseMigrationTool.Providers
                     LogDiagnostic($"==== EXECUTION ATTEMPT ====");
                     LogDiagnostic($"Connection: {fbConnection.ConnectionString}");
                     LogDiagnostic($"Connection State: {fbConnection.State}");
-                    LogDiagnostic($"Database: {fbConnection.Database}");
+                    // Extract database name from connection string for logging
+                    string dbNameForLog = "N/A";
+                    try
+                    {
+                        string connectionString = fbConnection?.ConnectionString ?? string.Empty;
+                        if (!string.IsNullOrEmpty(connectionString))
+                        {
+                            var parsedCs = ParseConnectionString(connectionString);
+                            dbNameForLog = parsedCs.ContainsKey("Database") ? parsedCs["Database"] : "N/A";
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        dbNameForLog = "N/A";
+                    }
+                    LogDiagnostic($"Database: {dbNameForLog}");
                     LogDiagnostic($"DataSource: {fbConnection.DataSource}");
                     LogDiagnostic($"SQL Query: {query}");
                     LogDiagnostic($"Table Name: {tableName}");
@@ -1420,36 +1555,90 @@ namespace DatabaseMigrationTool.Providers
             #pragma warning restore CS1998
         }
         
-        public override Task CreateTableAsync(DbConnection connection, Models.TableSchema tableSchema)
+        public override async Task CreateTableAsync(DbConnection connection, Models.TableSchema tableSchema)
         {
             if (!(connection is FbConnection fbConnection))
             {
                 throw new ArgumentException("Connection is not a valid Firebird connection");
             }
-            
+
             try
             {
                 // Make sure connection is open
                 if (fbConnection.State != ConnectionState.Open)
                 {
-                    fbConnection.Open();
+                    await fbConnection.OpenAsync();
                 }
-                
+
+                // Check if table already exists before trying to create it
+                bool tableExists = await CheckTableExistsAsync(fbConnection, tableSchema.Name);
+
+                if (tableExists)
+                {
+                    Log($"Table {tableSchema.Name} already exists - skipping creation");
+                    return;
+                }
+
                 // Generate table creation script
                 string script = GenerateTableCreationScript(tableSchema);
-                
+
+                Log($"Generated CREATE TABLE script for {tableSchema.Name}:");
+                Log(script);
+
                 // Execute the script
                 using var command = fbConnection.CreateCommand();
                 command.CommandText = script;
-                command.ExecuteNonQuery();
-                
+                try
+                {
+                    command.ExecuteNonQuery();
+                }
+                catch (FbException fbEx)
+                {
+                    Log($"Firebird SQL execution error for table {tableSchema.Name}:");
+                    Log($"SQL: {script}");
+                    Log($"Error: {fbEx.Message}");
+                    throw new InvalidOperationException($"Failed to create Firebird table {tableSchema.Name}: {fbEx.Message}. SQL: {script}", fbEx);
+                }
+
                 Log($"Created table {tableSchema.Name}");
-                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
                 Log($"Error creating table {tableSchema.Name}: {ex.Message}");
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Checks if a table exists in the Firebird database
+        /// </summary>
+        private async Task<bool> CheckTableExistsAsync(FbConnection connection, string tableName)
+        {
+            try
+            {
+                // Query Firebird system tables to check if table exists
+                // Check both original case (for quoted identifiers) and uppercase (for unquoted identifiers)
+                string query = @"
+                    SELECT COUNT(*)
+                    FROM rdb$relations
+                    WHERE rdb$view_source IS NULL
+                    AND (TRIM(TRAILING FROM rdb$relation_name) = @tableName OR TRIM(TRAILING FROM rdb$relation_name) = @tableNameUpper)";
+
+                using var command = new FbCommand(query, connection);
+                command.Parameters.Add(new FbParameter("@tableName", tableName));
+                command.Parameters.Add(new FbParameter("@tableNameUpper", tableName.ToUpperInvariant()));
+
+                var result = await command.ExecuteScalarAsync();
+                int count = Convert.ToInt32(result);
+
+                Log($"Table existence check for {tableName}: {(count > 0 ? "EXISTS" : "NOT FOUND")}");
+                return count > 0;
+            }
+            catch (Exception ex)
+            {
+                Log($"Error checking table existence for {tableName}: {ex.Message}");
+                // If we can't check, assume it doesn't exist and let the CREATE TABLE fail if needed
+                return false;
             }
         }
         
@@ -1689,48 +1878,181 @@ namespace DatabaseMigrationTool.Providers
                 throw;
             }
         }
-        
+
+        /// <summary>
+        /// Cleans SQL Server-specific default value syntax for Firebird compatibility
+        /// </summary>
+        private string CleanDefaultValueForFirebird(string defaultValue)
+        {
+            if (string.IsNullOrWhiteSpace(defaultValue))
+                return string.Empty;
+
+            string cleaned = defaultValue.Trim();
+
+            // Remove extra parentheses that SQL Server uses: ((0)) -> 0
+            while (cleaned.StartsWith("((") && cleaned.EndsWith("))"))
+            {
+                cleaned = cleaned.Substring(2, cleaned.Length - 4).Trim();
+            }
+
+            // Remove single extra parentheses if they wrap the entire value: (0) -> 0 (but keep function calls)
+            if (cleaned.StartsWith("(") && cleaned.EndsWith(")") && !cleaned.Contains("'"))
+            {
+                // Check if it's a simple value (not a function call)
+                string inner = cleaned.Substring(1, cleaned.Length - 2).Trim();
+                if (!inner.Contains("(") || (inner.All(c => char.IsDigit(c) || c == '.' || c == '-' || c == '+')))
+                {
+                    cleaned = inner;
+                }
+            }
+
+            // Convert SQL Server specific functions to Firebird equivalents
+            cleaned = cleaned.Replace("GETDATE()", "CURRENT_TIMESTAMP");
+            cleaned = cleaned.Replace("NEWID()", "GEN_UUID()");
+
+            return cleaned;
+        }
+
+        /// <summary>
+        /// Converts SQL-compatible types back to Firebird-native types for CREATE TABLE scripts
+        /// </summary>
+        private string ConvertSqlTypeToFirebirdType(string sqlType)
+        {
+            return sqlType.ToUpperInvariant() switch
+            {
+                "DATETIME2" => "TIMESTAMP",     // Convert back to Firebird's native timestamp type
+                "VARBINARY" => "BLOB",          // Convert back to Firebird's native blob type
+                "NVARCHAR" => "VARCHAR",        // Convert SQL Server NVARCHAR to VARCHAR
+                "NCHAR" => "CHAR",              // Convert SQL Server NCHAR to CHAR
+                "NTEXT" => "BLOB SUB_TYPE TEXT", // Convert SQL Server NTEXT to Firebird text blob
+                "TEXT" => "BLOB SUB_TYPE TEXT", // Convert SQL Server TEXT to Firebird text blob
+                "IMAGE" => "BLOB",              // Convert SQL Server IMAGE to BLOB
+                "UNIQUEIDENTIFIER" => "CHAR(36)", // Convert SQL Server GUID to CHAR(36)
+                "MONEY" => "DECIMAL(19,4)",     // Convert SQL Server MONEY to DECIMAL
+                "SMALLMONEY" => "DECIMAL(10,4)", // Convert SQL Server SMALLMONEY to DECIMAL
+                "TINYINT" => "SMALLINT",        // Convert SQL Server TINYINT to SMALLINT (Firebird doesn't have TINYINT)
+                "BIT" => "SMALLINT",            // Convert SQL Server BIT to SMALLINT
+                "REAL" => "FLOAT",              // Convert SQL Server REAL to FLOAT
+                "BIGINT" => "BIGINT",           // Keep as is
+                "INTEGER" => "INTEGER",         // Keep as is
+                "INT" => "INTEGER",             // Convert SQL Server INT to INTEGER
+                "SMALLINT" => "SMALLINT",       // Keep as is
+                "FLOAT" => "FLOAT",             // Keep as is
+                "DOUBLE" => "DOUBLE PRECISION", // Convert to Firebird's native double type
+                "DECIMAL" => "DECIMAL",         // Keep as is
+                "NUMERIC" => "NUMERIC",         // Keep as is
+                "VARCHAR" => "VARCHAR",         // Keep as is
+                "CHAR" => "CHAR",               // Keep as is
+                "DATE" => "DATE",               // Keep as is
+                "TIME" => "TIME",               // Keep as is
+                "TIMESTAMP" => "TIMESTAMP",     // Keep as is
+                "BLOB" => "BLOB",               // Keep as is
+                _ => "VARCHAR"                  // Default: convert unknown types to VARCHAR to avoid syntax errors
+            };
+        }
+
         public override string GenerateTableCreationScript(Models.TableSchema tableSchema)
         {
             var sb = new StringBuilder();
-            
+
             // Start table creation script
             sb.AppendLine($"CREATE TABLE \"{tableSchema.Name}\" (");
-            
+
             // Add columns
             var columnDefs = new List<string>();
             foreach (var column in tableSchema.Columns)
             {
-                string columnDef = $"  \"{column.Name}\" {column.DataType}";
-                
-                // Add size for string types
-                if (column.MaxLength.HasValue && column.MaxLength > 0)
+                // Validate column has required properties
+                if (string.IsNullOrWhiteSpace(column.Name))
                 {
-                    if (column.DataType == "VARCHAR" || column.DataType == "CHAR")
+                    Log($"Skipping column with empty name in table {tableSchema.Name}");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(column.DataType))
+                {
+                    Log($"Column {column.Name} has no data type, using VARCHAR as fallback");
+                    column.DataType = "VARCHAR";
+                }
+
+                // Convert SQL-compatible types back to Firebird-native types for CREATE TABLE
+                string firebirdDataType = ConvertSqlTypeToFirebirdType(column.DataType);
+
+                // Validate the converted type is not empty
+                if (string.IsNullOrWhiteSpace(firebirdDataType))
+                {
+                    Log($"Column {column.Name} converted to empty data type, using VARCHAR as fallback");
+                    firebirdDataType = "VARCHAR";
+                }
+
+                string columnDef = $"  \"{column.Name}\" {firebirdDataType}";
+
+                // Special handling for SQL Server types that already include size/precision in the conversion
+                bool hasBuiltInPrecision = firebirdDataType.Contains("(");
+
+                // Add size for string types (only if not already included)
+                if (!hasBuiltInPrecision)
+                {
+                    string upperDataType = column.DataType.ToUpperInvariant();
+                    string upperFirebirdType = firebirdDataType.ToUpperInvariant();
+
+                    if (upperFirebirdType == "VARCHAR" || upperFirebirdType == "CHAR")
                     {
-                        columnDef += $"({column.MaxLength})";
+                        if (column.MaxLength.HasValue && column.MaxLength > 0)
+                        {
+                            columnDef += $"({column.MaxLength})";
+                        }
+                        else
+                        {
+                            // Firebird requires size for VARCHAR/CHAR - use default size if not specified
+                            columnDef += "(255)";
+                            Log($"Column {column.Name}: Added default size (255) for {firebirdDataType}");
+                        }
                     }
                 }
-                
-                // Add precision and scale for numeric types
-                if (column.Precision.HasValue && column.Scale.HasValue)
+
+                // Add precision and scale for numeric types (only if not already included)
+                if (!hasBuiltInPrecision && column.Precision.HasValue && column.Scale.HasValue)
                 {
-                    if (column.DataType == "DECIMAL" || column.DataType == "NUMERIC")
+                    string upperDataType = column.DataType.ToUpperInvariant();
+                    if (upperDataType == "DECIMAL" || upperDataType == "NUMERIC")
                     {
                         columnDef += $"({column.Precision}, {column.Scale})";
                     }
                 }
-                
-                // Add nullability
-                columnDef += column.IsNullable ? " NULL" : " NOT NULL";
-                
-                // Add default value if specified
+
+                // Add default value BEFORE nullability constraint (Firebird syntax requirement)
                 if (!string.IsNullOrEmpty(column.DefaultValue))
                 {
-                    columnDef += $" DEFAULT {column.DefaultValue}";
+                    string defaultValue = column.DefaultValue.Trim();
+                    // Basic validation for Firebird default values
+                    if (!string.IsNullOrWhiteSpace(defaultValue))
+                    {
+                        // Clean up SQL Server-specific default value syntax for Firebird
+                        defaultValue = CleanDefaultValueForFirebird(defaultValue);
+                        if (!string.IsNullOrWhiteSpace(defaultValue))
+                        {
+                            columnDef += $" DEFAULT {defaultValue}";
+                        }
+                    }
                 }
-                
-                columnDefs.Add(columnDef);
+
+                // Add nullability AFTER default value (Firebird syntax requirement)
+                // Firebird doesn't use explicit NULL keyword - nullable is default
+                if (!column.IsNullable)
+                {
+                    columnDef += " NOT NULL";
+                }
+
+                // Final validation before adding column definition
+                if (!string.IsNullOrWhiteSpace(columnDef) && columnDef.Trim().Length > 5) // Must be more than just quotes and spaces
+                {
+                    columnDefs.Add(columnDef);
+                }
+                else
+                {
+                    Log($"Skipping invalid column definition for {column.Name}: '{columnDef}'");
+                }
             }
             
             // Add primary key constraint if any columns are marked as primary key
@@ -1739,11 +2061,17 @@ namespace DatabaseMigrationTool.Providers
             {
                 string pkName = tableSchema.Constraints
                     .FirstOrDefault(c => c.Type == "PRIMARY KEY")?.Name ?? $"PK_{tableSchema.Name}";
-                    
+
                 string pkColumnList = string.Join(", ", pkColumns.Select(c => $"\"{c.Name}\""));
                 columnDefs.Add($"  CONSTRAINT \"{pkName}\" PRIMARY KEY ({pkColumnList})");
             }
-            
+
+            // Validate we have at least some column definitions
+            if (columnDefs.Count == 0)
+            {
+                throw new InvalidOperationException($"Table {tableSchema.Name} has no valid column definitions for Firebird");
+            }
+
             // Finish table script
             sb.AppendLine(string.Join(",\n", columnDefs));
             sb.AppendLine(")");

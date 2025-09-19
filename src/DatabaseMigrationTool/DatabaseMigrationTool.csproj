@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.9.1" />
+    <PackageReference Include="FirebirdSql.Data.FirebirdClient" Version="8.5.4" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.8" />
     <PackageReference Include="MySqlConnector" Version="2.3.5" />
@@ -41,7 +42,6 @@
     <!-- Input validation -->
     <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
     <!-- Firebird database provider dependency -->
-    <PackageReference Include="FirebirdSql.Data.FirebirdClient" Version="10.3.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,16 +49,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Include firebird directory as content, keeping folder structure -->
-    <Content Include="firebird\**" CopyToOutputDirectory="Always" />
+    <!-- Include Firebird DLL directories - keep only in subfolders -->
+    <Content Include="FirebirdDlls\**" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
-  <!-- MSBuild target to copy Firebird DLLs to root directory after build -->
-  <Target Name="CopyFirebirdDllsToRoot" AfterTargets="Build">
-    <ItemGroup>
-      <FirebirdDlls Include="$(OutputPath)firebird\*.dll" />
-    </ItemGroup>
-    <Copy SourceFiles="@(FirebirdDlls)" DestinationFolder="$(OutputPath)" />
-  </Target>
+  <!-- All Firebird DLLs are uniquely named and can coexist in one directory -->
+  <!-- This eliminates the need for version-specific copying and cleanup -->
 
 </Project>

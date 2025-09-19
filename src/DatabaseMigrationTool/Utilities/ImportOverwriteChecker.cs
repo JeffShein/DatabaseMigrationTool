@@ -14,8 +14,8 @@ namespace DatabaseMigrationTool.Utilities
     public static class ImportOverwriteChecker
     {
         public static async Task<ImportOverwriteResult> CheckForExistingDataAsync(
-            IDatabaseProvider provider, 
-            DbConnection connection, 
+            IDatabaseProvider provider,
+            string connectionString,
             string inputPath,
             ImportOptions options)
         {
@@ -38,42 +38,63 @@ namespace DatabaseMigrationTool.Utilities
                     return result;
                 }
                 
+                // Debug: Log the metadata read
+                System.Diagnostics.Debug.WriteLine($"ImportOverwriteChecker: Export metadata has {exportMetadata.Schemas.Count} schemas");
+                foreach (var schema in exportMetadata.Schemas.Take(5))
+                {
+                    System.Diagnostics.Debug.WriteLine($"  - {schema.Name} ({schema.Schema})");
+                }
+
                 // Filter tables if specified in options
                 var tablesToImport = exportMetadata.Schemas.ToList();
                 if (options.Tables != null && options.Tables.Any())
                 {
+                    System.Diagnostics.Debug.WriteLine($"ImportOverwriteChecker: Filtering for tables: {string.Join(", ", options.Tables)}");
                     tablesToImport = tablesToImport
-                        .Where(t => options.Tables.Any(filterName => 
+                        .Where(t => options.Tables.Any(filterName =>
                             t.Name.Equals(filterName, StringComparison.OrdinalIgnoreCase) ||
                             t.FullName.Equals(filterName, StringComparison.OrdinalIgnoreCase)))
                         .ToList();
+                    System.Diagnostics.Debug.WriteLine($"ImportOverwriteChecker: After filtering, {tablesToImport.Count} tables remain");
                 }
-                
+
                 result.TablesToImport = tablesToImport.Select(t => t.FullName).ToList();
-                
+
                 if (tablesToImport.Count == 0)
                 {
-                    result.Message = options.Tables != null && options.Tables.Any() 
+                    result.Message = options.Tables != null && options.Tables.Any()
                         ? $"No tables found matching the specified filter: {string.Join(", ", options.Tables)}"
                         : "No tables found in export metadata";
                     return result;
                 }
                 
-                // Check connection
-                if (connection.State != System.Data.ConnectionState.Open)
-                {
-                    await connection.OpenAsync();
-                }
-                
+                // Create a fresh connection for the overwrite check to avoid connection state issues
+                using var checkConnection = provider.CreateConnection(connectionString);
+                await checkConnection.OpenAsync();
+
                 // Check which tables already exist in target database
-                var existingTables = await provider.GetTablesAsync(connection);
+                // Only check for tables that will actually be imported to avoid scanning all tables
+                var tableNamesToCheck = tablesToImport.Select(t => t.Name).ToList();
+
+                // Debug: Log what we're checking for
+                System.Diagnostics.Debug.WriteLine($"ImportOverwriteChecker: Checking for {tableNamesToCheck.Count} tables: {string.Join(", ", tableNamesToCheck)}");
+
+                var existingTables = await provider.GetTablesAsync(checkConnection, tableNamesToCheck);
+
+                // Debug: Log what was found
+                System.Diagnostics.Debug.WriteLine($"ImportOverwriteChecker: Found {existingTables.Count} existing tables: {string.Join(", ", existingTables.Select(t => t.Name))}");
+
                 var existingTableNames = existingTables.Select(t => t.FullName.ToLowerInvariant()).ToHashSet();
-                
+                var existingTableNamesOnly = existingTables.Select(t => t.Name.ToLowerInvariant()).ToHashSet();
+
                 // Analyze ALL tables that will be imported
                 foreach (var tableToImport in tablesToImport)
                 {
                     string tableName = tableToImport.FullName.ToLowerInvariant();
-                    bool tableExists = existingTableNames.Contains(tableName);
+                    string tableNameOnly = tableToImport.Name.ToLowerInvariant();
+
+                    // Check for exact match first (same schema), then check table name only (different schema)
+                    bool tableExists = existingTableNames.Contains(tableName) || existingTableNamesOnly.Contains(tableNameOnly);
                     
                     if (tableExists)
                     {
@@ -85,7 +106,7 @@ namespace DatabaseMigrationTool.Utilities
                         try
                         {
                             // Try to count rows in existing table
-                            rowCount = await GetTableRowCountAsync(provider, connection, tableToImport);
+                            rowCount = await GetTableRowCountAsync(provider, checkConnection, tableToImport);
                         }
                         catch
                         {
@@ -142,7 +163,8 @@ namespace DatabaseMigrationTool.Utilities
                 
                 if (provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
                 {
-                    countSql = $"SELECT COUNT(*) FROM [{table.Schema ?? "dbo"}].[{table.Name}] WITH (NOLOCK)";
+                    // For SQL Server, always use 'dbo' schema regardless of source schema (same mapping as import)
+                    countSql = $"SELECT COUNT(*) FROM [dbo].[{table.Name}] WITH (NOLOCK)";
                 }
                 else if (provider.ProviderName.Equals("MySQL", StringComparison.OrdinalIgnoreCase))
                 {

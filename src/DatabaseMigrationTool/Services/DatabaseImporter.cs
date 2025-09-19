@@ -49,11 +49,83 @@ namespace DatabaseMigrationTool.Services
         {
             // If critical, make it stand out
             string logMessage = critical ? $"[CRITICAL] {message}" : message;
-            
+
             _logWriter?.WriteLine(logMessage);
             _logWriter?.Flush(); // Ensure log is written immediately
         }
-        
+
+        /// <summary>
+        /// Drops a table if it exists
+        /// </summary>
+        private async Task DropTableAsync(string tableName)
+        {
+            try
+            {
+                // For Firebird, we need to ensure no other connections are holding locks
+                // Use a separate transaction with proper isolation for metadata operations
+                string dropSql = $"DROP TABLE \"{tableName}\"";
+                Log($"Executing DROP TABLE for {tableName}: {dropSql}");
+
+                // For Firebird, use explicit transaction control with proper isolation
+                if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log($"Preparing Firebird DDL operation for table {tableName}");
+
+                    // For Firebird, DDL operations require exclusive access
+                    // We need to create a completely new connection to avoid any transaction conflicts
+                    var connectionString = _connection.ConnectionString;
+
+                    // Force garbage collection to release any lingering resources
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+
+                    // Wait a moment for Firebird to release locks
+                    await Task.Delay(500);
+
+                    // Create a completely new connection for the DDL operation
+                    using var dedicatedConnection = _provider.CreateConnection(connectionString);
+                    await dedicatedConnection.OpenAsync();
+
+                    Log($"Created dedicated connection for Firebird DDL operation on {tableName}");
+
+                    // Use a dedicated transaction for the DROP operation
+                    using var transaction = dedicatedConnection.BeginTransaction(System.Data.IsolationLevel.ReadCommitted);
+                    using var command = dedicatedConnection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = dropSql;
+                    command.CommandTimeout = 60; // Longer timeout for DDL operations
+
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    await transaction.CommitAsync().ConfigureAwait(false);
+
+                    Log($"Successfully dropped table {tableName} using dedicated Firebird connection");
+                }
+                else
+                {
+                    // For non-Firebird providers, use the original approach
+                    using var command = _connection.CreateCommand();
+                    command.CommandText = dropSql;
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error dropping table {tableName}: {ex.Message}");
+
+                // For Firebird connection lock errors, provide specific guidance
+                if (ex.Message.Contains("lock conflict") || ex.Message.Contains("object TABLE") && ex.Message.Contains("is in use"))
+                {
+                    Log($"Detected Firebird metadata lock conflict for table {tableName}. This usually indicates another connection is still active.");
+                    Log($"Attempting to resolve by ensuring all connections are closed and retrying...");
+
+                    // Wait a moment for any lingering connections to release
+                    await Task.Delay(1000);
+                    throw;
+                }
+                throw;
+            }
+        }
+
         public async Task ImportAsync(string inputPath)
         {
             // Create log file in the inputPath directory
@@ -152,16 +224,57 @@ namespace DatabaseMigrationTool.Services
             }
 
             Log($"Found export from database '{export.DatabaseName}' with {export.Schemas?.Count ?? 0} tables");
-            
+
             // Report progress
             ReportProgress(10, 100, $"Loaded metadata: {export.Schemas?.Count ?? 0} tables from '{export.DatabaseName}'");
 
-            // Create schemas and tables
+            // Prepare table list for import (apply filtering early so schema creation is also filtered)
+            var tablesToImport = (export.Schemas ?? new List<TableSchema>()).ToList();
+            if (_options.UseDependencyOrder && export.DependencyOrder?.Any() == true)
+            {
+                Log("Using dependency order for import");
+                tablesToImport = ReorderTablesByDependency(export.Schemas ?? new List<TableSchema>(), export.DependencyOrder);
+            }
+
+            // Filter tables if specified - do this BEFORE schema creation
+            if (_options.Tables != null && _options.Tables.Any())
+            {
+                // Check if all specified tables exist in the export (check both Name and FullName)
+                var availableTableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var table in tablesToImport)
+                {
+                    availableTableNames.Add(table.Name);
+                    availableTableNames.Add(table.FullName);
+                }
+                var missingTables = _options.Tables.Where(t => !availableTableNames.Contains(t)).ToList();
+
+                if (missingTables.Any())
+                {
+                    string errorMessage = $"The following requested tables were not found in the export data: {string.Join(", ", missingTables)}";
+                    Log(errorMessage, true);
+                    throw new InvalidOperationException(errorMessage);
+                }
+
+                tablesToImport = tablesToImport
+                    .Where(t => _options.Tables.Any(filterName =>
+                        t.Name.Equals(filterName, StringComparison.OrdinalIgnoreCase) ||
+                        t.FullName.Equals(filterName, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                // Log the filter results
+                Log($"[CRITICAL] After filtering, {tablesToImport.Count} tables remain in import list", true);
+                foreach (var table in tablesToImport)
+                {
+                    Log($"[CRITICAL] - Will import: {table.Schema}.{table.Name}", true);
+                }
+            }
+
+            // Create schemas and tables using filtered table list
             if (_options.CreateSchema)
             {
                 // Report progress
                 ReportProgress(15, 100, "Creating database schema...");
-                await CreateSchemas(export.Schemas ?? new List<TableSchema>());
+                await CreateSchemas(tablesToImport);
             }
 
             // Report progress
@@ -169,7 +282,7 @@ namespace DatabaseMigrationTool.Services
             {
                 ReportProgress(40, 100, "Schema creation completed");
             }
-            
+
             // Import data
             if (!_options.SchemaOnly)
             {
@@ -179,50 +292,11 @@ namespace DatabaseMigrationTool.Services
                     throw new DirectoryNotFoundException($"Data directory not found: {dataDir}");
                 }
 
-                // Use dependency order for import if available
-                var tablesToImport = (export.Schemas ?? new List<TableSchema>()).ToList();
-                if (_options.UseDependencyOrder && export.DependencyOrder?.Any() == true)
-                {
-                    Log("Using dependency order for import");
-                    tablesToImport = ReorderTablesByDependency(export.Schemas ?? new List<TableSchema>(), export.DependencyOrder);
-                }
-                
                 // Enhanced functionality: Scan for data files not referenced in metadata
                 Log("Scanning for data files not referenced in metadata...");
                 await ScanForUnreferencedTables(dataDir, tablesToImport);
 
-                // Filter tables if specified
-                if (_options.Tables != null && _options.Tables.Any())
-                {
-                    // Check if all specified tables exist in the export (check both Name and FullName)
-                    var availableTableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var table in tablesToImport)
-                    {
-                        availableTableNames.Add(table.Name);
-                        availableTableNames.Add(table.FullName);
-                    }
-                    var missingTables = _options.Tables.Where(t => !availableTableNames.Contains(t)).ToList();
-                    
-                    if (missingTables.Any())
-                    {
-                        string errorMessage = $"The following requested tables were not found in the export data: {string.Join(", ", missingTables)}";
-                        Log(errorMessage, true);
-                        throw new InvalidOperationException(errorMessage);
-                    }
-                    
-                    tablesToImport = tablesToImport
-                        .Where(t => _options.Tables.Any(filterName => 
-                            t.Name.Equals(filterName, StringComparison.OrdinalIgnoreCase) ||
-                            t.FullName.Equals(filterName, StringComparison.OrdinalIgnoreCase)))
-                        .ToList();
-                    
-                    // Log the filter results
-                    Log($"[CRITICAL] After filtering, {tablesToImport.Count} tables remain in import list", true);
-                    foreach (var table in tablesToImport)
-                    {
-                        Log($"[CRITICAL] - Will import: {table.Schema}.{table.Name}", true);
-                    }
-                }
+                // Tables are already filtered above, no need to filter again here
 
                 int tableCount = 0;
                 int totalTables = tablesToImport.Count;
@@ -268,12 +342,22 @@ namespace DatabaseMigrationTool.Services
         {
             Log($"================ SCHEMA CREATION STARTED =================");
             Log($"Found {schemas.Count} tables to create");
-            
+
             var createdSchemas = new HashSet<string>();
 
             // Create schemas first
             Log($"Step 1: Creating necessary schemas...");
-            
+
+            // Store original schema names before any mapping for file lookup purposes
+            foreach (var table in schemas)
+            {
+                if (table.AdditionalProperties == null)
+                    table.AdditionalProperties = new Dictionary<string, string>();
+
+                // Store original schema name for file lookup
+                table.AdditionalProperties["OriginalSchema"] = table.Schema ?? "dbo";
+            }
+
             // Apply schema mapping for SQL Server before creating schemas
             if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
             {
@@ -297,6 +381,7 @@ namespace DatabaseMigrationTool.Services
                         Log($"Creating schema '{table.Schema}' if it doesn't exist");
                         
                         // SQL Server syntax for creating a schema if it doesn't exist
+                        Console.WriteLine($"[PROVIDER DEBUG] Provider name: '{_provider.ProviderName}'");
                         if (_provider.ProviderName.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
                         {
                             // Skip creating 'dbo' schema as it always exists in SQL Server
@@ -307,13 +392,21 @@ namespace DatabaseMigrationTool.Services
                                 continue;
                             }
                             
-                            string sql = $"IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{table.Schema}') EXEC('CREATE SCHEMA [{table.Schema}]');";
+                            string sql = $"IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{table.Schema}') EXEC('CREATE SCHEMA {_provider.EscapeIdentifier(table.Schema)}');";
                             Log($"Executing SQL: {sql}");
+                            Console.WriteLine($"[SQL SERVER DEBUG] About to execute SQL Server schema creation: {sql}");
                             await _connection.ExecuteNonQueryAsync(sql).ConfigureAwait(false);
+                        }
+                        else if (_provider.ProviderName.Equals("Firebird", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Firebird doesn't have CREATE SCHEMA - the schema is the user/owner name
+                            // In Firebird, when a user creates a table, they become the owner automatically
+                            Console.WriteLine($"[FIREBIRD DEBUG] Detected Firebird provider - skipping schema creation for '{table.Schema}'");
+                            Log($"Skipping schema creation for Firebird - schemas are handled automatically by user ownership");
                         }
                         else
                         {
-                            // Generic syntax for other database systems
+                            // Generic syntax for other database systems (MySQL, PostgreSQL, etc.)
                             string sql = $"CREATE SCHEMA IF NOT EXISTS {_provider.EscapeIdentifier(table.Schema)}";
                             Log($"Executing SQL: {sql}");
                             await _connection.ExecuteNonQueryAsync(sql).ConfigureAwait(false);
@@ -343,11 +436,37 @@ namespace DatabaseMigrationTool.Services
                 
                 try
                 {
+                    // Check if we need to drop existing table first
+                    if (_options.OverwriteExistingTables)
+                    {
+                        Log($"Checking if table {table.FullName} exists (overwrite mode enabled)");
+                        try
+                        {
+                            // Check if table exists by trying to get its schema
+                            var existingTables = await _provider.GetTablesAsync(_connection, new[] { table.Name }).ConfigureAwait(false);
+                            if (existingTables.Any(t => t.Name.Equals(table.Name, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                Log($"Table {table.FullName} exists - dropping before recreation");
+                                await DropTableAsync(table.Name).ConfigureAwait(false);
+                                Log($"Table {table.FullName} dropped successfully");
+                            }
+                            else
+                            {
+                                Log($"Table {table.FullName} does not exist - will create new");
+                            }
+                        }
+                        catch (Exception dropCheckEx)
+                        {
+                            Log($"Warning: Could not check/drop existing table {table.FullName}: {dropCheckEx.Message}");
+                            // Continue anyway - maybe table doesn't exist
+                        }
+                    }
+
                     // Create the table first
                     Log($"Creating table structure for {table.FullName}");
                     // We don't have direct access to the SQL, just log the creation attempt
                     Log($"Executing CreateTableAsync for {table.FullName}");
-                    
+
                     try
                     {
                         await _provider.CreateTableAsync(_connection, table).ConfigureAwait(false);
@@ -423,13 +542,22 @@ namespace DatabaseMigrationTool.Services
         private async Task ImportTableDataAsync(TableSchema table, string dataDir, Action<string>? fileProgressHandler = null)
         {
             Log($"================ TABLE DATA IMPORT FOR {table.FullName} =================", true);
-            
+
+            // Use original schema name for file lookup (before any schema mapping)
+            string originalSchema = table.AdditionalProperties?.GetValueOrDefault("OriginalSchema") ?? table.Schema ?? "dbo";
+
+            if (originalSchema != table.Schema)
+            {
+                Log($"Schema mapping detected: '{originalSchema}' -> '{table.Schema}'. Using original schema for file lookup.");
+            }
+
             // Check for data files existence first
-            string expectedFileName = $"{table.Schema}_{table.Name}.bin";
+            string expectedFileName = $"{originalSchema}_{table.Name}.bin";
             string expectedPath = Path.Combine(dataDir, expectedFileName);
-            string batchPattern = $"{table.Schema}_{table.Name}_batch*.bin";
-            
+            string batchPattern = $"{originalSchema}_{table.Name}_batch*.bin";
+
             Log($"Checking for data files for {table.FullName}");
+            Log($"Using original schema '{originalSchema}' for file lookup");
             Log($"Expecting file: {expectedPath}");
             Log($"Or batch pattern: {Path.Combine(dataDir, batchPattern)}");
             
@@ -510,34 +638,51 @@ namespace DatabaseMigrationTool.Services
         {
             try
             {
+                // Debug logging for table filtering
+                Log($"[SCAN DEBUG] _options.Tables is null: {_options.Tables == null}");
+                if (_options.Tables != null)
+                {
+                    Log($"[SCAN DEBUG] _options.Tables.Count: {_options.Tables.Count}");
+                    Log($"[SCAN DEBUG] _options.Tables contents: [{string.Join(", ", _options.Tables)}]");
+                }
+
+                // If specific tables are being imported (filtering is active), skip scanning for unreferenced tables
+                // This prevents adding back tables that were intentionally filtered out
+                if (_options.Tables != null && _options.Tables.Any())
+                {
+                    Log($"Table filtering is active - skipping scan for unreferenced tables to respect filter");
+                    Log($"Only importing specified tables: {string.Join(", ", _options.Tables)}");
+                    return;
+                }
+
                 // Get all data files in the directory
                 var allDataFiles = Directory.GetFiles(dataDir, "*.bin")
                     .Where(f => !Path.GetFileName(f).Contains("_batch"))  // Exclude batch files
                     .ToList();
-                
+
                 Log($"Found {allDataFiles.Count} data files in directory");
-                
+
                 // Check which files correspond to tables not in the import list
                 foreach (var dataFile in allDataFiles)
                 {
                     string fileName = Path.GetFileNameWithoutExtension(dataFile);
-                    
+
                     // Try to extract schema and table name from file name (format: schema_table.bin)
                     if (fileName.Contains("_"))
                     {
                         string[] parts = fileName.Split('_', 2);
                         string schema = parts[0];
                         string tableName = parts[1];
-                        
+
                         // Check if this table is already in the import list
-                        bool tableExists = tablesToImport.Any(t => 
-                            t.Name.Equals(tableName, StringComparison.OrdinalIgnoreCase) && 
+                        bool tableExists = tablesToImport.Any(t =>
+                            t.Name.Equals(tableName, StringComparison.OrdinalIgnoreCase) &&
                             t.Schema?.Equals(schema, StringComparison.OrdinalIgnoreCase) == true);
-                        
+
                         if (!tableExists)
                         {
                             Log($"[CRITICAL] Found data file for table not in metadata: {fileName}", true);
-                            
+
                             // Try to discover table schema from data file
                             try
                             {
@@ -575,7 +720,7 @@ namespace DatabaseMigrationTool.Services
                         }
                     }
                 }
-                
+
                 Log($"Total tables to import after scanning: {tablesToImport.Count}");
             }
             catch (Exception ex)
@@ -692,5 +837,6 @@ namespace DatabaseMigrationTool.Services
         public bool ContinueOnError { get; set; } = false;
         public int BatchSize { get; set; } = 100000;
         public bool UseDependencyOrder { get; set; } = true;
+        public bool OverwriteExistingTables { get; set; } = false;
     }
 }

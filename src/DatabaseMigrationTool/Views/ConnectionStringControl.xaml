@@ -276,18 +276,15 @@
                                  Checked="FirebirdPasswordOverride_Changed" Unchecked="FirebirdPasswordOverride_Changed"/>
                     </Grid>
 
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Data Format:" Margin="0,5,10,5" VerticalAlignment="Center"/>
-                    <ComboBox Grid.Row="3" Grid.Column="1" x:Name="FirebirdFormatComboBox" Margin="0,5" SelectedIndex="1" SelectionChanged="ConnectionField_TextChanged">
-                        <ComboBoxItem Content="Firebird 3.0+"/>
-                        <ComboBoxItem Content="Firebird 2.5"/>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Firebird Version:" Margin="0,5,10,5" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Row="3" Grid.Column="1" x:Name="FirebirdFormatComboBox" Margin="0,5" SelectedIndex="1" SelectionChanged="FirebirdFormat_Changed"
+                             ToolTip="Select the Firebird database version - this determines which client library is used">
+                        <ComboBoxItem Content="Firebird 5.0 / 4.0 / 3.0+" Tag="5.0"/>
+                        <ComboBoxItem Content="Firebird 2.5" Tag="2.5"/>
                     </ComboBox>
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Read-Only:" Margin="0,5,10,5" VerticalAlignment="Center"/>
-                    <CheckBox Grid.Row="4" Grid.Column="1" x:Name="FirebirdReadOnlyCheckBox" Margin="0,5" IsChecked="True"
-                             Content="Open database in read-only mode" Checked="ConnectionField_TextChanged" Unchecked="ConnectionField_TextChanged"/>
-
-                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Additional Options:" Margin="0,5,10,5" VerticalAlignment="Center"/>
-                    <TextBox Grid.Row="5" Grid.Column="1" x:Name="FirebirdAdditionalOptionsTextBox" Margin="0,5"
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Additional Options:" Margin="0,5,10,5" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="4" Grid.Column="1" x:Name="FirebirdAdditionalOptionsTextBox" Margin="0,5"
                             Text="{Binding FirebirdAdditionalOptions, ElementName=ConnectionControl, UpdateSourceTrigger=PropertyChanged}"
                             ToolTip="Additional Firebird connection options" TextChanged="ConnectionField_TextChanged"/>
                 </Grid>
