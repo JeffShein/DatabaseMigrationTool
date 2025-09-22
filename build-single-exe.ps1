@@ -56,34 +56,67 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Copy Firebird DLLs for single-file deployment
+# Copy Firebird DLLs for single-file deployment - NEW ARCHITECTURE
 Write-Host "Copying Firebird native libraries..." -ForegroundColor Cyan
 
-$firebird25Path = "src/DatabaseMigrationTool/Firebird_2_5"
-$firebird50Path = "src/DatabaseMigrationTool/Firebird_5_0"
+$firebird25Path = "src/DatabaseMigrationTool/FirebirdDlls/v25"
+$firebird50Path = "src/DatabaseMigrationTool/FirebirdDlls/v50"
 
 if ((Test-Path $firebird25Path) -and (Test-Path $firebird50Path)) {
-    # Copy Firebird 2.5 DLLs (for backward compatibility)
-    $fb25Dlls = Get-ChildItem -Path $firebird25Path -Filter "*.dll"
-    foreach ($dll in $fb25Dlls) {
-        Copy-Item -Path $dll.FullName -Destination $publishPath -Force
-        Write-Host "  - Copied $($dll.Name) (FB 2.5)" -ForegroundColor Gray
+    # Copy Firebird 2.5 files to FirebirdDlls/v25 subdirectory (for ClientLibrary parameter)
+    $fb25SubPath = "$publishPath/FirebirdDlls/v25"
+    New-Item -Path $fb25SubPath -ItemType Directory -Force | Out-Null
+    $fb25Files = Get-ChildItem -Path $firebird25Path -File -Recurse
+    $firebird25FullPath = (Resolve-Path $firebird25Path).Path
+    foreach ($file in $fb25Files) {
+        $relativePath = $file.FullName.Substring($firebird25FullPath.Length + 1)
+        $destPath = Join-Path $fb25SubPath $relativePath
+        $destDir = Split-Path $destPath -Parent
+        New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        Copy-Item -Path $file.FullName -Destination $destPath -Force
+        Write-Host "  - Copied $relativePath (FB 2.5)" -ForegroundColor Gray
     }
-    
-    # Copy essential Firebird 5.0 DLLs (overwrites fbclient.dll for FB 5.0 support)
-    $fb50Essential = @("fbclient.dll", "ib_util.dll", "icu*.dll", "msvcp140.dll", "vcruntime140*.dll", "zlib1.dll")
-    foreach ($pattern in $fb50Essential) {
-        $fb50Files = Get-ChildItem -Path $firebird50Path -Filter $pattern -ErrorAction SilentlyContinue
-        foreach ($file in $fb50Files) {
+
+    # Copy Firebird 5.0 files to root output directory
+    $fb50Files = Get-ChildItem -Path $firebird50Path -File
+    foreach ($file in $fb50Files) {
+        # Skip engine13.dll from root copy - will be handled separately
+        if ($file.Name -ne "engine13.dll") {
             Copy-Item -Path $file.FullName -Destination $publishPath -Force
             Write-Host "  - Copied $($file.Name) (FB 5.0)" -ForegroundColor Gray
         }
     }
-    
-    Write-Host "[OK] Both Firebird 2.5 and 5.0 libraries deployed" -ForegroundColor Green
-    Write-Host "     Note: Application will use correct DLL set based on data format selection" -ForegroundColor Gray
+
+    # CRITICAL: Copy engine13.dll to TWO locations as per CLAUDE.md requirements
+    $engine13Source = "$firebird50Path/engine13.dll"
+    if (Test-Path $engine13Source) {
+        # Copy to base folder
+        Copy-Item -Path $engine13Source -Destination "$publishPath/engine13.dll" -Force
+        Write-Host "  - Copied engine13.dll to base folder (REQUIRED)" -ForegroundColor Yellow
+
+        # Create plugins directory and copy engine13.dll there too
+        $pluginsPath = "$publishPath/plugins"
+        New-Item -Path $pluginsPath -ItemType Directory -Force | Out-Null
+        Copy-Item -Path $engine13Source -Destination "$pluginsPath/engine13.dll" -Force
+        Write-Host "  - Copied engine13.dll to plugins folder (REQUIRED)" -ForegroundColor Yellow
+    } else {
+        Write-Host "[ERROR] engine13.dll not found at $engine13Source" -ForegroundColor Red
+    }
+
+    # Ensure NO plugins.conf file is included (causes conflicts per CLAUDE.md)
+    $pluginsConfPath = "$publishPath/plugins.conf"
+    if (Test-Path $pluginsConfPath) {
+        Remove-Item -Path $pluginsConfPath -Force
+        Write-Host "  - Removed plugins.conf (causes conflicts)" -ForegroundColor Yellow
+    }
+
+    Write-Host "[OK] Firebird configuration deployed per CLAUDE.md requirements" -ForegroundColor Green
+    Write-Host "     - FB 2.5: Uses ClientLibrary parameter to FirebirdDlls/v25 subfolder" -ForegroundColor Gray
+    Write-Host "     - FB 5.0: Uses base folder DLLs" -ForegroundColor Gray
+    Write-Host "     - engine13.dll: Present in BOTH base and plugins folders" -ForegroundColor Gray
 } else {
     Write-Host "[!] Firebird directories not found: $firebird25Path or $firebird50Path" -ForegroundColor Yellow
+    Write-Host "    Expected new architecture with FirebirdDlls/v25 and FirebirdDlls/v50" -ForegroundColor Yellow
 }
 
 # Check what files were created
