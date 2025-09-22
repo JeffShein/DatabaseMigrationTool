@@ -25,43 +25,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Building and Testing
 ```bash
-# Build and run tests
-dotnet build && dotnet test
+# Build the main application
+dotnet build src/DatabaseMigrationTool/DatabaseMigrationTool.csproj
 
-# Run application in GUI mode
-dotnet run
+# Build entire solution
+dotnet build DatabaseMigrationTool.sln
+
+# Run application in GUI mode (default)
+dotnet run --project src/DatabaseMigrationTool
 
 # Run with command line interface
-dotnet run -- --console
+dotnet run --project src/DatabaseMigrationTool -- --console
 
 # Run specific command (e.g., list providers)
-dotnet run -- providers
+dotnet run --project src/DatabaseMigrationTool -- providers
+
+# Build single executable for distribution
+.\build-single-exe.ps1
 ```
 
 ### Common Development Tasks
 ```bash
 # Export database
-dotnet run -- export --provider firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;" --output ./export
+dotnet run --project src/DatabaseMigrationTool -- export --provider firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;" --output ./export
 
 # Import database
-dotnet run -- import --provider firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;" --input ./export
+dotnet run --project src/DatabaseMigrationTool -- import --provider firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;" --input ./export
 
 # Test Firebird connection
-dotnet run -- test-firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;"
+dotnet run --project src/DatabaseMigrationTool -- test-firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;"
+
+# View database schema
+dotnet run --project src/DatabaseMigrationTool -- schema --provider firebird --connection "Database=test.fdb;User=SYSDBA;Password=pass;"
 
 # Build distribution
-.\build-distribution.ps1
+.\build-single-exe.ps1
 ```
 
 ## Project Structure
 
-- `src/DatabaseMigrationTool/` - Main application
+- `src/DatabaseMigrationTool/` - Main WPF application with CLI support
   - `Commands/` - CLI command handlers
-  - `Providers/` - Database provider implementations
+  - `Providers/` - Database provider implementations (Firebird, SQL Server, MySQL, PostgreSQL)
   - `Services/` - Core business logic services
-  - `Views/` - WPF UI components
+  - `Views/` - WPF UI components and dialogs
   - `Models/` - Data models and schemas
   - `Utilities/` - Helper classes and utilities
+  - `FirebirdDlls/` - Firebird client libraries for v2.5 and v5.0+
+- `src/FirebirdTest/` - Standalone Firebird connection testing utility
+- `installer/` - WiX installer configuration for MSI distribution
+- `docs/` - Comprehensive documentation
 
 ## Key Architecture Patterns
 
@@ -95,10 +108,11 @@ See additional documentation files:
 
 ## Development Workflow
 
-1. **Feature Development**: Create feature branches, implement with tests
-2. **Testing**: Use `dotnet test` and manual testing with real databases
-3. **Building**: Ensure 0 warnings with `dotnet build`
-4. **Distribution**: Test with `.\build-distribution.ps1` before release
+1. **Feature Development**: Create feature branches, implement functionality
+2. **Testing**: Manual testing with real databases (no automated test suite currently)
+3. **Building**: Ensure 0 warnings with `dotnet build` - treat warnings as errors
+4. **Distribution**: Test with `.\build-single-exe.ps1` before release
+5. **Debugging**: Use the FirebirdTest utility for isolated Firebird connection testing
 
 ## Recent Improvements
 

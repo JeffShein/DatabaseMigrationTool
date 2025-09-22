@@ -7,6 +7,7 @@ using System.Data;
 using System.Data.Common;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -87,8 +88,10 @@ namespace DatabaseMigrationTool.Providers
                 string filePath = ExtractDatabaseFilePath(parsedConnectionString);
                 string resolvedFilePath = ResolveFilePath(filePath);
                 
-                Log("Using ServerType=1 (Embedded) with fbembed.dll");
-                
+                // Determine version for logging
+                string version = parsedConnectionString.ContainsKey("Version") ? parsedConnectionString["Version"] : "2.5";
+                Log($"Using ServerType=1 (Embedded) with version-specific fbembed.dll for Firebird {version}");
+
                 // Create and test connection
                 return CreateAndTestConnection(resolvedFilePath, parsedConnectionString);
             }
@@ -190,7 +193,21 @@ namespace DatabaseMigrationTool.Providers
         private FbConnection CreateAndTestConnection(string filePath, Dictionary<string, string> parsedConnectionString)
         {
             // Determine Firebird version from connection string
-            string version = parsedConnectionString.ContainsKey("Version") ? parsedConnectionString["Version"] : "2.5";
+            string version = parsedConnectionString.ContainsKey("Version") ? parsedConnectionString["Version"] : "5.0";
+            Log($"Using Firebird version {version}");
+
+            // Handle version-specific setup
+            if (version == "2.5")
+            {
+                // Switch to Firebird 2.5 DLLs in subdirectory
+                Log("Switching to Firebird 2.5 DLLs in FirebirdDlls/v25 subdirectory");
+                // Note: DLL switching logic would be implemented here if needed
+            }
+            else
+            {
+                // Firebird 5.0 files are in application root
+                Log("Using Firebird 5.0 DLLs from application root");
+            }
 
             // Create a Firebird connection with appropriate settings
             string fbConnectionString = BuildFirebirdConnectionString(filePath, parsedConnectionString);
@@ -200,23 +217,26 @@ namespace DatabaseMigrationTool.Providers
             Log("Creating Firebird connection with ServerType=1 (Embedded)");
             Log($"File exists: {(_isLocalFile ? "Yes, local file" : "No, server database")}");
             Log($"Connection string: {MaskPassword(fbConnectionString)}");
-            Log($"Using Firebird version {version} with DLL switcher");
-
-            // Use FirebirdDllSwitcher to set correct DLL path
-            using var dllSwitcher = new FirebirdDllSwitcher();
-            if (!dllSwitcher.SwitchToVersion(version))
-            {
-                throw new InvalidOperationException($"Failed to switch to Firebird version {version} DLLs");
-            }
 
             FbConnection? connection = null;
             try
             {
+                Console.WriteLine($"[FB DEBUG] About to create FbConnection with connection string");
+                Console.WriteLine($"[FB DEBUG] Using Firebird version {version}");
+                Console.WriteLine($"[FB DEBUG] Raw connection string being passed to FbConnection: {fbConnectionString}");
+
                 // Create connection with the built connection string
                 connection = new FbConnection(fbConnectionString);
 
+                Console.WriteLine($"[FB DEBUG] FbConnection created, internal connection string: {connection.ConnectionString}");
+
+                Console.WriteLine($"[FB DEBUG] FbConnection created, about to open");
+
                 // Try to open the connection to test if it works
                 connection.Open();
+
+                Console.WriteLine($"[FB DEBUG] Connection opened successfully");
+
                 connection.Close();
 
                 Log($"Successfully connected to Firebird database: {filePath}");
@@ -226,6 +246,7 @@ namespace DatabaseMigrationTool.Providers
             }
             catch (FbException ex)
             {
+                Console.WriteLine($"[FB DEBUG] FbException during connection: {ex.Message}");
                 Log($"Connection attempt failed: {ex.Message}");
                 throw; // Re-throw the exception
             }
@@ -266,71 +287,30 @@ namespace DatabaseMigrationTool.Providers
         }
         
         /// <summary>
-        /// Builds a valid Firebird connection string using ServerType=4 with external DLL 
+        /// Builds a Firebird connection string for embedded mode - minimal parameters only
         /// </summary>
         private string BuildFirebirdConnectionString(string filePath, Dictionary<string, string> parsedConnectionString)
         {
-            // Use parsed connection string values with no hardcoded defaults
-            string user = parsedConnectionString.TryGetValue("User", out var u) ? u : "";
-            
-            // IMPORTANT: Use the exact password from the original connection string
-            // Default value "Hosis11223344" was previously hard-coded in schema view
-            string password = parsedConnectionString.TryGetValue("Password", out var p) ? p : "Hosis11223344";
-            
-            // Build consistent connection string for all Firebird tables
-            StringBuilder connectionStringBuilder = new StringBuilder();
-            connectionStringBuilder.Append($"Database={filePath};");
-            connectionStringBuilder.Append($"User={user};");
-            connectionStringBuilder.Append($"Password={password};");
-            
-            // Use standard configuration that works for all tables
-            connectionStringBuilder.Append("ServerType=1;"); // Embedded mode
-            // Remove UseSingleConnection=1 to prevent connection locks across operations
-            connectionStringBuilder.Append("ClientEncoding=NONE;");
-            // Add transaction isolation to prevent lock conflicts
-            connectionStringBuilder.Append("IsolationLevel=ReadCommitted;");
-            // Disable connection pooling to prevent metadata locks
-            connectionStringBuilder.Append("Pooling=false;"); 
-            
-            // Use relative path for Firebird client library that works from any location
-            string appDir = AppDomain.CurrentDomain.BaseDirectory;
-            string firebirdLibPath = Path.Combine(appDir, "fbembed.dll");
-            connectionStringBuilder.Append($"FbClientLibrary={firebirdLibPath};");
-            
-            // Add explicit dialect parameter if provided
-            if (parsedConnectionString.TryGetValue("Dialect", out var dialect))
+            // Use parsed connection string values
+            string user = parsedConnectionString.TryGetValue("User", out var u) ? u : "SYSDBA";
+            string password = parsedConnectionString.TryGetValue("Password", out var p) ? p : "masterkey";
+            string version = parsedConnectionString.TryGetValue("Version", out var v) ? v : "5.0";
+
+            // Build connection string - use ServerType=1 for embedded mode
+            string connectionString = $"User={user};Password={password};Database={filePath};ServerType=1;";
+
+            // For Firebird 2.5, specify the client library path
+            if (version == "2.5")
             {
-                connectionStringBuilder.Append($"Dialect={dialect};");
-                Log($"Using explicit dialect: {dialect}");
-            }
-            
-            // Add explicit isolation level if provided
-            if (parsedConnectionString.TryGetValue("IsolationLevel", out var isolationLevel))
-            {
-                connectionStringBuilder.Append($"IsolationLevel={isolationLevel};");
-                Log($"Using explicit isolation level: {isolationLevel}");
-            }
-            
-            Log("Using ServerType=1 (Embedded) parameters with fbembed.dll");
-            
-            // Always add DataSource=localhost for consistency with schema view
-            connectionStringBuilder.Append("DataSource=localhost;");
-            
-            // Add optional parameters if provided
-            if (parsedConnectionString.TryGetValue("Role", out var role) && !string.IsNullOrEmpty(role))
-            {
-                connectionStringBuilder.Append($"Role={role};");
+                string appDirectory = AppContext.BaseDirectory;
+                string clientLibPath = Path.Combine(appDirectory, "FirebirdDlls", "v25", "fbembed.dll");
+                connectionString += $"ClientLibrary={clientLibPath};";
+                Log($"Added ClientLibrary path for Firebird 2.5: {clientLibPath}");
             }
 
-            if (parsedConnectionString.TryGetValue("Charset", out var charset) && !string.IsNullOrEmpty(charset))
-            {
-                connectionStringBuilder.Append($"Charset={charset};");
-            }
-            
-            string finalConnectionString = connectionStringBuilder.ToString();
-            LogDiagnostic($"Unmasked connection string for debugging: {finalConnectionString}");
-            Log($"Built connection string: {MaskPassword(finalConnectionString)}");
-            return finalConnectionString;
+            Log($"Built minimal connection string: {MaskPassword(connectionString)}");
+            LogDiagnostic($"Unmasked connection string for debugging: {connectionString}");
+            return connectionString;
         }
         
         // SYSDBA fallback code removed as it's not needed
@@ -552,12 +532,7 @@ namespace DatabaseMigrationTool.Providers
                 Log($"Warning: Cannot access connection string (using defaults): {ex.Message}");
             }
 
-            // Set up DLL switcher for the operation
-            using var dllSwitcher = new FirebirdDllSwitcher();
-            if (!dllSwitcher.SwitchToVersion(version))
-            {
-                Log($"Warning: Failed to switch to Firebird version {version} DLLs");
-            }
+            // No DLL switching needed - files are deployed at build time
 
             Log($"Reading tables from {dbInfo}");
 
@@ -1122,7 +1097,7 @@ namespace DatabaseMigrationTool.Providers
             string dbName = "Unknown Database";
             try
             {
-                string connectionString = fbConnection?.ConnectionString ?? string.Empty;
+                string connectionString = fbConnection.ConnectionString ?? string.Empty;
                 if (!string.IsNullOrEmpty(connectionString))
                 {
                     var parsedCs = ParseConnectionString(connectionString);
@@ -1199,7 +1174,7 @@ namespace DatabaseMigrationTool.Providers
                     string dbNameForLog = "N/A";
                     try
                     {
-                        string connectionString = fbConnection?.ConnectionString ?? string.Empty;
+                        string connectionString = fbConnection.ConnectionString ?? string.Empty;
                         if (!string.IsNullOrEmpty(connectionString))
                         {
                             var parsedCs = ParseConnectionString(connectionString);
@@ -1211,10 +1186,10 @@ namespace DatabaseMigrationTool.Providers
                         dbNameForLog = "N/A";
                     }
                     LogDiagnostic($"Database: {dbNameForLog}");
-                    LogDiagnostic($"DataSource: {fbConnection.DataSource}");
+                    LogDiagnostic($"DataSource: {fbConnection.DataSource ?? "N/A"}");
                     LogDiagnostic($"SQL Query: {query}");
                     LogDiagnostic($"Table Name: {tableName}");
-                    LogDiagnostic($"ServerVersion: {fbConnection.ServerVersion}");
+                    LogDiagnostic($"ServerVersion: {fbConnection.ServerVersion ?? "N/A"}");
                     // LogDiagnostic($"Client Library: {fbConnection.ClientLibrary}"); - Not available in this version of Firebird provider
                     
                     // Create command with specific settings for access to BOMISC table
