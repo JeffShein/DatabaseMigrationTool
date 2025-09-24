@@ -110,7 +110,10 @@
       "Bash(./src/DatabaseMigrationTool/bin/Debug/net9.0-windows/win-x86/DatabaseMigrationTool.exe test-firebird --connection \"Database=C:\\Dev\\DatabaseMigrationTool\\POSNL25.FDB;User=SYSDB;Password=Hosis11223344;Version=2.5;\")",
       "Bash(echo:*)",
       "Bash(./src/DatabaseMigrationTool/bin/Debug/net9.0-windows/win-x86/DatabaseMigrationTool.exe test-firebird --connection \"Database=C:\\Dev\\DatabaseMigrationTool\\POSNL50.FDB;User=SYSDBA;Password=Hosis11223344;Version=5.0;\")",
-      "Bash(./FirebirdTest.exe \"C:\\Dev\\DatabaseMigrationTool\\POSNL50.FDB\")"
+      "Bash(./FirebirdTest.exe \"C:\\Dev\\DatabaseMigrationTool\\POSNL50.FDB\")",
+      "Bash(tasklist.exe)",
+      "Bash(./src/DatabaseMigrationTool/bin/Debug/net9.0-windows/win-x86/DatabaseMigrationTool.exe export --provider firebird --connection \"Database=C:\\Dev\\DatabaseMigrationTool\\POSNL25.FDB;User=SYSDB;Password=Hosis11223344;Version=2.5;\" --output /tmp/test_appdata_export --tables \"APPDATA\" --schema-only)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": [],

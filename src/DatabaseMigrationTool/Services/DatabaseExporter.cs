@@ -761,22 +761,25 @@ namespace DatabaseMigrationTool.Services
                                                     }
                                                     else if (typeName.Contains("int"))
                                                     {
-                                                        // Need to check if it's a bigint (Int64) or regular int (Int32)
+                                                        // Handle different integer types based on actual SQL Server type names
                                                         if (typeName.Contains("bigint"))
                                                         {
                                                             value = reader.GetInt64(i);
                                                         }
+                                                        else if (typeName.Contains("smallint"))
+                                                        {
+                                                            // SMALLINT maps to Int16, convert to Int32 for consistency
+                                                            value = (int)reader.GetInt16(i);
+                                                        }
+                                                        else if (typeName.Contains("tinyint"))
+                                                        {
+                                                            // TINYINT maps to byte, convert to Int32 for consistency
+                                                            value = (int)reader.GetByte(i);
+                                                        }
                                                         else
                                                         {
-                                                            try
-                                                            {
-                                                                value = reader.GetInt32(i);
-                                                            }
-                                                            catch (InvalidCastException)
-                                                            {
-                                                                // Fall back to Int64 if Int32 fails
-                                                                value = reader.GetInt64(i);
-                                                            }
+                                                            // Regular INT type
+                                                            value = reader.GetInt32(i);
                                                         }
                                                     }
                                                     else if (typeName.Contains("datetime") || typeName.Contains("date"))

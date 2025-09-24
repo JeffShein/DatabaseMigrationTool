@@ -436,7 +436,7 @@ namespace DatabaseMigrationTool.Views
             }
 
             var connection = connectionResult.Data!;
-            StatusTextBlock.Text = "Connection created successfully, preparing to export...";
+            Dispatcher.Invoke(() => StatusTextBlock.Text = "Connection created successfully, preparing to export...");
             
             // Create progress handler to update status
             Action<string> updateStatus = (message) => 
@@ -620,7 +620,7 @@ namespace DatabaseMigrationTool.Views
         private Task HandleExportErrorAsync(Exception ex)
         {
             var errorInfo = ErrorHandler.HandleError(ex, "Export Operation", showUserMessage: false);
-            StatusTextBlock.Text = "Export failed.";
+            Dispatcher.Invoke(() => StatusTextBlock.Text = "Export failed.");
             
             // Reset progress UI
             Dispatcher.Invoke(() =>
@@ -978,7 +978,7 @@ namespace DatabaseMigrationTool.Views
         private Task HandleImportErrorAsync(Exception ex)
         {
             var errorInfo = ErrorHandler.HandleError(ex, "Import Operation", showUserMessage: false);
-            StatusTextBlock.Text = "Import failed.";
+            Dispatcher.Invoke(() => StatusTextBlock.Text = "Import failed.");
             
             // Reset progress UI
             Dispatcher.Invoke(() =>
@@ -1132,10 +1132,9 @@ namespace DatabaseMigrationTool.Views
                 
                 // Display schema viewer - must create window on UI thread
                 Dispatcher.Invoke(() => {
-                    bool showDetailedInfo = SchemaVerboseCheckBox.IsChecked ?? false;
                     string connectionString = SchemaConnectionString;
-                    
-                    var schemaViewer = new SchemaViewWindow(tables, showDetailedInfo, connectionString, providerName);
+
+                    var schemaViewer = new SchemaViewWindow(tables, connectionString, providerName);
                     schemaViewer.Owner = this;
                     schemaViewer.ShowDialog();
                 });
@@ -1187,7 +1186,7 @@ namespace DatabaseMigrationTool.Views
                 catch (Exception ex)
                 {
                     ErrorHandler.HandleError(ex, $"Generate Script for {table.Name}", showUserMessage: false);
-                    StatusTextBlock.Text = $"Error generating script for {table.Name}: {ex.Message}";
+                    Dispatcher.Invoke(() => StatusTextBlock.Text = $"Error generating script for {table.Name}: {ex.Message}");
                 }
             }
         }
@@ -1821,7 +1820,6 @@ namespace DatabaseMigrationTool.Views
                 Provider = GetSelectedProviderName(SchemaProviderIndex),
                 ConnectionString = SchemaConnectionString,
                 Tables = SchemaTablesTextBox.Text,
-                Verbose = SchemaVerboseCheckBox.IsChecked ?? false,
                 GenerateScripts = SchemaScriptOutputCheckBox.IsChecked ?? false,
                 ScriptPath = SchemaScriptPathTextBox.Text
             };
@@ -1885,7 +1883,6 @@ namespace DatabaseMigrationTool.Views
                 }
                 
                 SchemaTablesTextBox.Text = config.Schema.Tables ?? "";
-                SchemaVerboseCheckBox.IsChecked = config.Schema.Verbose;
                 SchemaScriptOutputCheckBox.IsChecked = config.Schema.GenerateScripts;
                 SchemaScriptPathTextBox.Text = config.Schema.ScriptPath ?? "";
             }
@@ -2009,7 +2006,6 @@ namespace DatabaseMigrationTool.Views
             ImportCreateForeignKeysCheckBox.IsChecked = settings.Defaults.CreateForeignKeys;
             ImportContinueOnErrorCheckBox.IsChecked = settings.Defaults.ContinueOnError;
             
-            SchemaVerboseCheckBox.IsChecked = settings.Defaults.VerboseSchema;
             SchemaScriptOutputCheckBox.IsChecked = settings.Defaults.GenerateScripts;
             
             // Apply UI preferences
@@ -2037,7 +2033,6 @@ namespace DatabaseMigrationTool.Views
                 _settingsService.Settings.Defaults.CreateSchema = ImportCreateSchemaCheckBox.IsChecked ?? true;
                 _settingsService.Settings.Defaults.CreateForeignKeys = ImportCreateForeignKeysCheckBox.IsChecked ?? true;
                 _settingsService.Settings.Defaults.ContinueOnError = ImportContinueOnErrorCheckBox.IsChecked ?? false;
-                _settingsService.Settings.Defaults.VerboseSchema = SchemaVerboseCheckBox.IsChecked ?? false;
                 _settingsService.Settings.Defaults.GenerateScripts = SchemaScriptOutputCheckBox.IsChecked ?? false;
                 
                 await _settingsService.SaveSettingsAsync();

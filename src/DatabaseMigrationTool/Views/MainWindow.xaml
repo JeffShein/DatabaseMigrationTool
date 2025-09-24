@@ -297,7 +297,6 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Tables:" VerticalAlignment="Center"/>
@@ -315,18 +314,14 @@
                                             Click="ClearSchemaTables_Click" ToolTip="Clear table list"/>
                                 </Grid>
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Detailed View:" VerticalAlignment="Center"/>
-                                <CheckBox Grid.Row="1" Grid.Column="1" x:Name="SchemaVerboseCheckBox" Margin="10" 
-                                          VerticalAlignment="Center" Content="Show detailed schema information"/>
-
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Generate Scripts:" VerticalAlignment="Center"/>
-                                <CheckBox Grid.Row="2" Grid.Column="1" x:Name="SchemaScriptOutputCheckBox" Margin="10" 
-                                          VerticalAlignment="Center" Content="Generate SQL scripts" 
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Generate Scripts:" VerticalAlignment="Center"/>
+                                <CheckBox Grid.Row="1" Grid.Column="1" x:Name="SchemaScriptOutputCheckBox" Margin="10"
+                                          VerticalAlignment="Center" Content="Generate SQL scripts"
                                           Checked="SchemaScriptOutputCheckBox_Changed"
                                           Unchecked="SchemaScriptOutputCheckBox_Changed"/>
 
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Script Output Path:" VerticalAlignment="Center"/>
-                                <Grid Grid.Row="3" Grid.Column="1">
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Script Output Path:" VerticalAlignment="Center"/>
+                                <Grid Grid.Row="2" Grid.Column="1">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>

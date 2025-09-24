@@ -902,7 +902,7 @@ namespace DatabaseMigrationTool
                     CreateForeignKeys = !options.NoCreateForeignKeys,
                     SchemaOnly = options.SchemaOnly,
                     ContinueOnError = options.ContinueOnError,
-                    OverwriteExistingTables = options.ContinueOnError // Enable overwrite when continue-on-error is set
+                    OverwriteExistingTables = true // Always enable overwrite - user confirmation handles safety
                 };
                 
                 // Check for existing data and get user confirmation

@@ -38,7 +38,6 @@ namespace DatabaseMigrationTool.Models
         public bool CreateSchema { get; set; } = true;
         public bool CreateForeignKeys { get; set; } = true;
         public bool ContinueOnError { get; set; } = false;
-        public bool VerboseSchema { get; set; } = false;
         public bool GenerateScripts { get; set; } = false;
     }
 

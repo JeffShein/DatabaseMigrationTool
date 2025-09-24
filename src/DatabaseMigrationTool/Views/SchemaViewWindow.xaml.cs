@@ -16,7 +16,6 @@ namespace DatabaseMigrationTool.Views
     public partial class SchemaViewWindow : Window
     {
         private List<TableSchema> _tables;
-        private bool _showDetailedInfo;
         private CollectionViewSource _tableViewSource;
         private IDatabaseProvider? _provider;
         // No longer needed with the background thread approach
@@ -26,15 +25,14 @@ namespace DatabaseMigrationTool.Views
         private string _connectionString = string.Empty;
         private string _providerName = "sqlserver";
         
-        public SchemaViewWindow(List<TableSchema> tables, bool showDetailedInfo, string connectionString = "", string providerName = "sqlserver")
+        public SchemaViewWindow(List<TableSchema> tables, string connectionString = "", string providerName = "sqlserver")
         {
             InitializeComponent();
-            
+
             // Reset any wait cursor that might be active
             System.Windows.Input.Mouse.OverrideCursor = null;
-            
+
             _tables = tables;
-            _showDetailedInfo = showDetailedInfo;
             _connectionString = connectionString;
             _providerName = providerName;
             

@@ -221,21 +221,121 @@ namespace DatabaseMigrationTool.Providers
             FbConnection? connection = null;
             try
             {
-                Console.WriteLine($"[FB DEBUG] About to create FbConnection with connection string");
-                Console.WriteLine($"[FB DEBUG] Using Firebird version {version}");
-                Console.WriteLine($"[FB DEBUG] Raw connection string being passed to FbConnection: {fbConnectionString}");
+                Log("About to create FbConnection with connection string");
+                Log($"Using Firebird version {version}");
+                Log($"Raw connection string being passed to FbConnection: {MaskPassword(fbConnectionString)}");
+
+                // Add DLL diagnostics
+                var currentDirectory = System.IO.Directory.GetCurrentDirectory();
+                Log($"Current working directory: {currentDirectory}");
+
+                // Check for Firebird DLLs
+                string[] firebirdDlls = { "fbembed.dll", "fbclient.dll", "engine13.dll" };
+                foreach (string dll in firebirdDlls)
+                {
+                    string dllPath = System.IO.Path.Combine(currentDirectory, dll);
+                    bool exists = System.IO.File.Exists(dllPath);
+                    Log($"{dll}: {(exists ? "Found" : "NOT FOUND")} at {dllPath}");
+
+                    if (exists)
+                    {
+                        var dllInfo = new System.IO.FileInfo(dllPath);
+                        Log($"{dll} size: {dllInfo.Length} bytes, modified: {dllInfo.LastWriteTime}");
+                    }
+                }
+
+                // Check for v25 subdirectory if this is version 2.5
+                if (version == "2.5")
+                {
+                    string v25Path = System.IO.Path.Combine(currentDirectory, "FirebirdDlls", "v25");
+                    Log($"Checking v25 subdirectory: {v25Path}");
+                    Log($"v25 directory exists: {System.IO.Directory.Exists(v25Path)}");
+
+                    if (System.IO.Directory.Exists(v25Path))
+                    {
+                        foreach (string dll in firebirdDlls)
+                        {
+                            string dllPath = System.IO.Path.Combine(v25Path, dll);
+                            bool exists = System.IO.File.Exists(dllPath);
+                            Log($"v25/{dll}: {(exists ? "Found" : "NOT FOUND")}");
+                        }
+                    }
+                }
+
+                // Add file diagnostics
+                if (_isLocalFile && System.IO.File.Exists(filePath))
+                {
+                    var fileInfo = new System.IO.FileInfo(filePath);
+                    Log($"File exists: {filePath}");
+                    Log($"File size: {fileInfo.Length} bytes");
+                    Log($"File last modified: {fileInfo.LastWriteTime}");
+                    Log($"File attributes: {fileInfo.Attributes}");
+
+                    // Note: Cannot test file readability here as it would create a lock conflict with Firebird embedded mode
+                    Log($"File exists and basic properties accessible - skipping read test to avoid lock conflict");
+                }
+                else if (_isLocalFile)
+                {
+                    Log($"Local file does not exist: {filePath}");
+                    // Check if directory exists
+                    string? directory = System.IO.Path.GetDirectoryName(filePath);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Log($"Directory exists: {System.IO.Directory.Exists(directory)}");
+                    }
+                }
 
                 // Create connection with the built connection string
                 connection = new FbConnection(fbConnectionString);
 
-                Console.WriteLine($"[FB DEBUG] FbConnection created, internal connection string: {connection.ConnectionString}");
+                Log($"FbConnection created, internal connection string: {MaskPassword(connection.ConnectionString)}");
 
-                Console.WriteLine($"[FB DEBUG] FbConnection created, about to open");
+                Log($"FbConnection created, about to open");
 
-                // Try to open the connection to test if it works
-                connection.Open();
+                // Try to open the connection to test if it works (with retry for file locks)
+                int maxRetries = 3;
+                int retryDelayMs = 1000;
+                FbException? lastException = null;
 
-                Console.WriteLine($"[FB DEBUG] Connection opened successfully");
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                {
+                    try
+                    {
+                        Log($"Connection attempt {attempt} of {maxRetries}");
+                        connection.Open();
+                        Log($"Connection opened successfully on attempt {attempt}");
+                        break; // Success, exit retry loop
+                    }
+                    catch (FbException ex) when (attempt < maxRetries && (ex.Message.Contains("CreateFile") || ex.Message.Contains("I/O error") || ex.Message.Contains("Error while trying to open file")))
+                    {
+                        lastException = ex;
+                        Log($"Connection attempt {attempt} failed with file lock error: {ex.Message}");
+                        Log($"Connection attempt {attempt} failed, retrying in {retryDelayMs}ms: {ex.Message}");
+
+                        // Wait before retry
+                        System.Threading.Thread.Sleep(retryDelayMs);
+                        retryDelayMs *= 2; // Exponential backoff
+                    }
+                    catch (FbException ex)
+                    {
+                        // Non-retryable exception or final attempt
+                        Log($"Connection attempt {attempt} failed with non-retryable error: {ex.Message}");
+                        throw;
+                    }
+                }
+
+                // If we exit the loop without opening, throw the last exception
+                if (connection.State != System.Data.ConnectionState.Open)
+                {
+                    if (lastException != null)
+                    {
+                        throw lastException;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Failed to open connection after multiple attempts");
+                    }
+                }
 
                 connection.Close();
 
@@ -246,7 +346,7 @@ namespace DatabaseMigrationTool.Providers
             }
             catch (FbException ex)
             {
-                Console.WriteLine($"[FB DEBUG] FbException during connection: {ex.Message}");
+                Log($"FbException during connection: {ex.Message}");
                 Log($"Connection attempt failed: {ex.Message}");
                 throw; // Re-throw the exception
             }
@@ -1642,12 +1742,35 @@ namespace DatabaseMigrationTool.Providers
                     string columns = string.Join(", ", index.Columns.Select(c => $"\"{c}\""));
                     
                     string script = $"CREATE {uniqueFlag} INDEX \"{index.Name}\" ON \"{tableSchema.Name}\" ({columns})";
-                    
+
                     using var command = fbConnection.CreateCommand();
                     command.CommandText = script;
-                    command.ExecuteNonQuery();
-                    
-                    Log($"Created index {index.Name} on table {tableSchema.Name}");
+
+                    Log($"About to execute CREATE INDEX for {index.Name}: {script}");
+
+                    try
+                    {
+                        command.ExecuteNonQuery();
+                        Log($"Created index {index.Name} on table {tableSchema.Name}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Exception caught while creating index {index.Name}: {ex.GetType().Name}");
+                        Log($"Exception message: {ex.Message}");
+
+                        // Check if it's an FbException with "already exists" message
+                        if (ex is FbException fbEx && ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Log($"Index {index.Name} already exists on table {tableSchema.Name} - skipping creation");
+                            Log($"Firebird message: {fbEx.Message}");
+                        }
+                        else
+                        {
+                            // Other errors should be thrown
+                            Log($"Unexpected error creating index {index.Name}: {ex.Message}");
+                            throw;
+                        }
+                    }
                 }
                 
                 return Task.CompletedTask;
@@ -1683,9 +1806,24 @@ namespace DatabaseMigrationTool.Providers
                         
                         using var command = fbConnection.CreateCommand();
                         command.CommandText = script;
-                        command.ExecuteNonQuery();
-                        
-                        Log($"Created check constraint {constraint.Name} on table {tableSchema.Name}");
+
+                        try
+                        {
+                            command.ExecuteNonQuery();
+                            Log($"Created check constraint {constraint.Name} on table {tableSchema.Name}");
+                        }
+                        catch (FbException fbEx)
+                        {
+                            if (fbEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Log($"Check constraint {constraint.Name} already exists on table {tableSchema.Name} - skipping creation");
+                            }
+                            else
+                            {
+                                Log($"Error creating check constraint {constraint.Name}: {fbEx.Message}");
+                                throw;
+                            }
+                        }
                     }
                     else if (constraint.Type == "UNIQUE" && constraint.Columns.Count > 0)
                     {
@@ -1694,9 +1832,24 @@ namespace DatabaseMigrationTool.Providers
                         
                         using var command = fbConnection.CreateCommand();
                         command.CommandText = script;
-                        command.ExecuteNonQuery();
-                        
-                        Log($"Created unique constraint {constraint.Name} on table {tableSchema.Name}");
+
+                        try
+                        {
+                            command.ExecuteNonQuery();
+                            Log($"Created unique constraint {constraint.Name} on table {tableSchema.Name}");
+                        }
+                        catch (FbException fbEx)
+                        {
+                            if (fbEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Log($"Unique constraint {constraint.Name} already exists on table {tableSchema.Name} - skipping creation");
+                            }
+                            else
+                            {
+                                Log($"Error creating unique constraint {constraint.Name}: {fbEx.Message}");
+                                throw;
+                            }
+                        }
                     }
                 }
                 
@@ -1747,9 +1900,24 @@ namespace DatabaseMigrationTool.Providers
                         
                     using var command = fbConnection.CreateCommand();
                     command.CommandText = script;
-                    command.ExecuteNonQuery();
-                    
-                    Log($"Created foreign key {fk.Name} on table {tableSchema.Name}");
+
+                    try
+                    {
+                        command.ExecuteNonQuery();
+                        Log($"Created foreign key {fk.Name} on table {tableSchema.Name}");
+                    }
+                    catch (FbException fbEx)
+                    {
+                        if (fbEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Log($"Foreign key {fk.Name} already exists on table {tableSchema.Name} - skipping creation");
+                        }
+                        else
+                        {
+                            Log($"Error creating foreign key {fk.Name}: {fbEx.Message}");
+                            throw;
+                        }
+                    }
                 }
                 
                 return Task.CompletedTask;
